@@ -26,26 +26,56 @@ def get_coordinates_from_address(address):
         params = {
             'q': address,
             'format': 'json',
-            'limit': 1
+            'limit': 5,  # Get multiple results
+            'countrycodes': 'us'  # Limit to US
         }
         headers = {
             'User-Agent': 'River-Level-Monitor/1.0'
         }
         
-        response = requests.get(url, params=params, headers=headers)
+        response = requests.get(url, params=params, headers=headers, timeout=10)
         response.raise_for_status()
         
         results = response.json()
         if results:
-            lat = float(results[0]['lat'])
-            lon = float(results[0]['lon'])
-            display_name = results[0]['display_name']
-            print(f"\n✓ Found: {display_name}")
-            return lat, lon
+            # Show multiple options if available
+            if len(results) > 1:
+                print("\n📍 Found multiple locations:")
+                for i, result in enumerate(results[:5], 1):
+                    print(f"  [{i}] {result['display_name']}")
+                
+                choice = input("\nSelect location (1-5, or 0 to try again): ").strip()
+                try:
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(results):
+                        selected = results[idx]
+                        lat = float(selected['lat'])
+                        lon = float(selected['lon'])
+                        print(f"\n✓ Selected: {selected['display_name']}")
+                        return lat, lon
+                    else:
+                        print("\n✗ Invalid selection")
+                        return None
+                except ValueError:
+                    print("\n✗ Invalid input")
+                    return None
+            else:
+                lat = float(results[0]['lat'])
+                lon = float(results[0]['lon'])
+                display_name = results[0]['display_name']
+                print(f"\n✓ Found: {display_name}")
+                return lat, lon
         else:
             print("\n✗ Location not found")
+            print("   Try a simpler format like:")
+            print("   - Charlestown, Indiana")
+            print("   - Louisville, KY")
+            print("   - Cincinnati, OH")
             return None
             
+    except requests.Timeout:
+        print("\n✗ Geocoding service timed out")
+        return None
     except Exception as e:
         print(f"\n✗ Error geocoding address: {e}")
         return None
@@ -290,15 +320,32 @@ def run_wizard(config_name='config'):
         # Address input
         print("\nExamples:")
         print("  - Louisville, KY")
-        print("  - 123 Main St, Cincinnati, OH")
-        print("  - Ohio River")
+        print("  - Charlestown, Indiana")
+        print("  - Cincinnati, OH")
         
-        address = input("\nEnter address or location: ").strip()
-        
-        if address:
-            coords = get_coordinates_from_address(address)
-            if coords:
-                latitude, longitude = coords
+        while not latitude or not longitude:
+            address = input("\nEnter address or location (or 'skip' to enter coordinates instead): ").strip()
+            
+            if address.lower() == 'skip':
+                print("\nSwitching to coordinate entry...")
+                location_method = '2'
+                break
+            
+            if address:
+                coords = get_coordinates_from_address(address)
+                if coords:
+                    latitude, longitude = coords
+                    break
+                else:
+                    retry = input("\nTry another address? (y/n): ").strip().lower()
+                    if retry != 'y':
+                        print("\nYou can enter coordinates instead or skip location setup.")
+                        skip = input("Enter coordinates manually? (y/n): ").strip().lower()
+                        if skip == 'y':
+                            location_method = '2'
+                            break
+                        else:
+                            break
     
     elif location_method == '2':
         # Coordinate input
