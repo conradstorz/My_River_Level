@@ -1,0 +1,13 @@
+# USGS Water Data Tools
+dataretrieval
+hyswap
+
+# Data Analysis
+pandas
+numpy
+
+# API and Web Requests
+requests
+
+# Visualization (optional)
+matplotlib

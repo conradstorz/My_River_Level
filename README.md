@@ -1,0 +1,139 @@
+# River Level Extreme Conditions Monitor
+
+A Python system that monitors USGS stream gauges to detect and report extreme water conditions (floods and droughts) for waterways.
+
+## Features
+
+- 🔍 Find USGS monitoring gauges near any location
+- 📊 Fetch real-time and historical water data
+- 📈 Calculate statistical percentiles to identify extreme conditions
+- ⚠️ Alert on flood and drought conditions
+- 📋 Generate detailed condition reports
+
+## Based on USGS Data Tools
+
+This project uses the modernized USGS Water Data for the Nation services:
+- **dataretrieval**: Access USGS water data
+- **hyswap**: Statistical analysis for surface water
+- Data from: https://waterdata.usgs.gov/
+
+Reference: https://waterdata.usgs.gov/blog/wdfn-stats-delivery/
+
+## Installation
+
+1. Install Python 3.8 or higher
+
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
+
+## Configuration
+
+Edit `config.py` to set up your monitoring:
+
+### Option 1: Monitor specific gauges
+```python
+MONITORING_SITES = [
+    "01646500",  # Potomac River near Washington, DC
+    "01638500",  # Potomac River at Point of Rocks, MD
+]
+```
+
+### Option 2: Find gauges near a location
+```python
+LOCATION = {
+    "latitude": 38.9072,   # Washington, DC
+    "longitude": -77.0369,
+}
+SEARCH_RADIUS_MILES = 25
+```
+
+Find gauge numbers at: https://waterdata.usgs.gov/
+
+### Adjust alert thresholds
+```python
+LOW_FLOW_PERCENTILE = 10   # Bottom 10% = drought
+HIGH_FLOW_PERCENTILE = 90  # Top 90% = flood risk
+VERY_LOW_PERCENTILE = 5    # Severe drought
+VERY_HIGH_PERCENTILE = 95  # Severe flood
+```
+
+## Usage
+
+Run the monitor:
+```bash
+python river_monitor.py
+```
+
+### Sample Output
+```
+================================================================================
+RIVER LEVEL EXTREME CONDITIONS REPORT
+Generated: 2026-02-14 10:30:00
+================================================================================
+
+⚠️ ALERT Site: 01646500
+  Current Value: 2458.00 cfs
+  As of: 2026-02-14 10:15:00
+  Condition: SEVERE LOW (Severe drought conditions)
+  Percentile: 3.2%
+  Historical Range: 1200.00 - 425000.00 cfs
+  Historical Median: 8950.00 cfs
+
+✓ Site: 01638500
+  Current Value: 8523.00 cfs
+  As of: 2026-02-14 10:15:00
+  Condition: NORMAL (Normal flow conditions)
+  Percentile: 48.5%
+  Historical Range: 850.00 - 335000.00 cfs
+  Historical Median: 8200.00 cfs
+
+================================================================================
+Summary: 1 of 2 sites show extreme conditions
+================================================================================
+```
+
+## Understanding the Data
+
+### Parameter Codes
+- **00060**: Discharge (streamflow) in cubic feet per second (cfs)
+- **00065**: Gage height in feet
+
+### Condition Classifications
+- **SEVERE HIGH** (≥95th percentile): Severe flood conditions
+- **HIGH** (≥90th percentile): Above normal flow, flood risk
+- **NORMAL** (10th-90th percentile): Normal conditions
+- **LOW** (≤10th percentile): Below normal flow, drought
+- **SEVERE LOW** (≤5th percentile): Severe drought conditions
+
+## Project Structure
+
+```
+My_River_level/
+├── river_monitor.py     # Main monitoring script
+├── config.py            # Configuration settings
+├── requirements.txt     # Python dependencies
+└── README.md           # This file
+```
+
+## Next Steps
+
+- Add email/SMS alerts for extreme conditions
+- Create visualizations with matplotlib
+- Build a web dashboard
+- Schedule automated monitoring
+- Export reports to CSV/JSON
+- Add support for multiple parameter types (stage, temperature, etc.)
+
+## Resources
+
+- [USGS Water Data for the Nation](https://waterdata.usgs.gov/)
+- [dataretrieval Documentation](https://github.com/DOI-USGS/dataRetrieval)
+- [hyswap Documentation](https://doi-usgs.github.io/hyswap/)
+- [Find Monitoring Locations](https://waterdata.usgs.gov/nwis/rt)
+- [National Water Dashboard](https://dashboard.waterdata.usgs.gov/)
+
+## Support
+
+For USGS data questions: gs-w_waterdata_support@usgs.gov
