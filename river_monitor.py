@@ -296,29 +296,30 @@ def check_first_run(config_module):
     Returns:
         True if setup is needed, False otherwise
     """
-    # Check if config has monitoring sites or locaconfig_name=args.config)
-                
-                if not success:
-                    print("\n⚠️  Setup not completed. Exiting.")
-                    return
-                
-                # Reload config after setup
-                config = load_config(args.config)
-                
-            except ImportError:
-                print("\n✗ Error: setup_wizard.py not found")
-                print("Please run: python setup_wizard.py")
-                return
-            except Exception as e:
-                print(f"\n✗ Error during setup: {e}")
-                return
-        else:
-            print(f"\n⚠️  Please configure MONITORING_SITES or LOCATION in {args.config}.py")
-            print(f"Or run: python setup_wizard.py --config {args.config}")
-            return
+    # Check if config has monitoring sites or location
+    if not config_module.MONITORING_SITES and not (config_module.LOCATION['latitude'] and config_module.LOCATION['longitude']):
+        return True
+    return False
+
+
+def main():
+    """Main execution function"""
     
-    # Initialize monitor with the loaded config
-    monitor = RiverMonitor(config.MONITORING_SITES
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='River Level Extreme Conditions Monitor')
+    parser.add_argument('--config', '-c', default='config',
+                        help='Configuration file to use (without .py extension). Default: config')
+    parser.add_argument('--list-configs', '-l', action='store_true',
+                        help='List available configuration files')
+    
+    args = parser.parse_args()
+    
+    # List configurations if requested
+    if args.list_configs:
+        print("\n" + "="*80)
+        print("AVAILABLE CONFIGURATIONS")
+        print("="*80)
+        
         config_files = [f for f in os.listdir('.') if f.startswith('config') and f.endswith('.py')]
         
         if config_files:
@@ -361,15 +362,14 @@ def check_first_run(config_module):
             # Import and run setup wizard
             try:
                 import setup_wizard
-                success = setup_wizard.run_wizard()
+                success = setup_wizard.run_wizard(config_name=args.config)
                 
                 if not success:
                     print("\n⚠️  Setup not completed. Exiting.")
                     return
                 
                 # Reload config after setup
-                import importlib
-                importlib.reload(config)
+                config = load_config(args.config)
                 
             except ImportError:
                 print("\n✗ Error: setup_wizard.py not found")
@@ -379,12 +379,12 @@ def check_first_run(config_module):
                 print(f"\n✗ Error during setup: {e}")
                 return
         else:
-            print("\n⚠️  Please configure MONITORING_SITES or LOCATION in config.py")
-            print("Or run: python setup_wizard.py")
+            print(f"\n⚠️  Please configure MONITORING_SITES or LOCATION in {args.config}.py")
+            print(f"Or run: python setup_wizard.py --config {args.config}")
             return
     
-    # Initialize monitor
-    monitor = RiverMonitor()
+    # Initialize monitor with the loaded config
+    monitor = RiverMonitor(config.MONITORING_SITES)
     
     # If location is configured, find nearby sites
     if config.LOCATION['latitude'] and config.LOCATION['longitude']:
@@ -407,8 +407,8 @@ def check_first_run(config_module):
     # Check if we have sites to monitor
     if not monitor.site_numbers:
         print("\nNo monitoring sites configured!")
-        print("Please set MONITORING_SITES in config.py or LOCATION coordinates")
-        print(f"Please set MONITORING_SITES in {args.config}.gov/")
+        print(f"Please set MONITORING_SITES in {args.config}.py or LOCATION coordinates")
+        print("Find sites at: https://waterdata.usgs.gov/")
         return
     
     # Monitor all sites
