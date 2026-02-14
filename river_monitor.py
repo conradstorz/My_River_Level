@@ -9,7 +9,8 @@ import numpy as np
 from datetime import datetime, timedelta
 import os
 import sys
-import config
+import argparse
+import importlib.util
 
 
 class RiverMonitor:
@@ -261,24 +262,89 @@ class RiverMonitor:
         print("="*80 + "\n")
 
 
-def check_first_run():
+def load_config(config_name='config'):
+    """
+    Load a configuration file
+    
+    Args:
+        config_name: Name of config file (without .py extension)
+        
+    Returns:
+        Loaded config module
+    """
+    config_file = f"{config_name}.py"
+    
+    if not os.path.exists(config_file):
+        print(f"\n✗ Configuration file '{config_file}' not found")
+        return None
+    
+    # Load the config module dynamically
+    spec = importlib.util.spec_from_file_location(config_name, config_file)
+    config_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config_module)
+    
+    return config_module
+
+
+def check_first_run(config_module):
     """
     Check if this is the first run and configuration is needed
     
+    Args:
+        config_module: Configuration module
+        
     Returns:
         True if setup is needed, False otherwise
     """
-    # Check if config has monitoring sites or location
-    if not config.MONITORING_SITES and not (config.LOCATION['latitude'] and config.LOCATION['longitude']):
-        return True
-    return False
-
-
-def main():
-    """Main execution function"""
+    # Check if config has monitoring sites or locaconfig_name=args.config)
+                
+                if not success:
+                    print("\n⚠️  Setup not completed. Exiting.")
+                    return
+                
+                # Reload config after setup
+                config = load_config(args.config)
+                
+            except ImportError:
+                print("\n✗ Error: setup_wizard.py not found")
+                print("Please run: python setup_wizard.py")
+                return
+            except Exception as e:
+                print(f"\n✗ Error during setup: {e}")
+                return
+        else:
+            print(f"\n⚠️  Please configure MONITORING_SITES or LOCATION in {args.config}.py")
+            print(f"Or run: python setup_wizard.py --config {args.config}")
+            return
+    
+    # Initialize monitor with the loaded config
+    monitor = RiverMonitor(config.MONITORING_SITES
+        config_files = [f for f in os.listdir('.') if f.startswith('config') and f.endswith('.py')]
+        
+        if config_files:
+            for config_file in sorted(config_files):
+                config_name = config_file[:-3]  # Remove .py
+                print(f"  - {config_name}")
+            print("\nUse: python river_monitor.py --config <name>")
+        else:
+            print("  No configuration files found")
+        
+        print("="*80 + "\n")
+        return
+    
+    # Load configuration
+    print(f"\n📋 Loading configuration: {args.config}.py")
+    config = load_config(args.config)
+    
+    if config is None:
+        print("\nAvailable options:")
+        print("  1. Run setup wizard: python setup_wizard.py")
+        print(f"  2. Create {args.config}.py manually")
+        print("  3. List configs: python river_monitor.py --list-configs")
+        return
     
     # Check if setup is needed
-    if check_first_run():
+    if check_first_run(config):
         print("\n" + "="*80)
         print("⚠️  FIRST RUN DETECTED")
         print("="*80)
@@ -342,7 +408,7 @@ def main():
     if not monitor.site_numbers:
         print("\nNo monitoring sites configured!")
         print("Please set MONITORING_SITES in config.py or LOCATION coordinates")
-        print("Find sites at: https://waterdata.usgs.gov/")
+        print(f"Please set MONITORING_SITES in {args.config}.gov/")
         return
     
     # Monitor all sites

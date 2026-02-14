@@ -24,6 +24,9 @@ dist/
 *.swp
 *.swo
 
+# Configuration files (keep config.py as template)
+config_*.py
+
 # Data files
 *.csv
 *.xlsx

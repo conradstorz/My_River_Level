@@ -155,6 +155,35 @@ If you haven't configured any gauges, you'll see:
 Would you like to run the setup wizard? (y/n)
 ```
 
+### Multiple Configurations
+
+You can create and maintain multiple configurations for different locations:
+
+**Create a new configuration:**
+```bash
+python setup_wizard.py --config ohio_river
+python setup_wizard.py --config mississippi
+```
+
+**List all configurations:**
+```bash
+python river_monitor.py --list-configs
+# or
+python setup_wizard.py --list
+```
+
+**Run with a specific configuration:**
+```bash
+python river_monitor.py --config ohio_river
+python river_monitor.py --config mississippi
+```
+
+This is useful for:
+- Monitoring multiple waterways
+- Different alert thresholds for different locations
+- Separate configurations for work vs personal monitoring
+- Testing different gauge selections
+
 ### Running the Setup Wizard Manually
 
 You can re-run the setup wizard anytime:
