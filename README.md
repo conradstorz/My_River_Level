@@ -25,69 +25,70 @@ Reference: https://waterdata.usgs.gov/blog/wdfn-stats-delivery/
 - Python 3.8 or higher
 - Git (for cloning the repository)
 
-### Setup with Virtual Environment (Recommended)
+### Quick Setup (Recommended)
 
-**Option 1: Using venv (built-in)**
-```bash
-# Clone the repository
-git clone git@github.com:conradstorz/My_River_Level.git
-cd My_River_Level
-
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# On Windows:
-venv\Scripts\activate
-# On Linux/Mac:
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run the setup wizard
-python setup_wizard.py
-```
-
-**Option 2: Using uv (faster alternative)**
-```bash
-# Install uv if you don't have it
-pip install uv
-
-# Clone the repository
-git clone git@github.com:conradstorz/My_River_Level.git
-cd My_River_Level
-
-# Create virtual environment with uv
-uv venv
-
-# Activate virtual environment
-# On Windows:
-.venv\Scripts\activate
-# On Linux/Mac:
-source .venv/bin/activate
-
-# Install dependencies with uv (much faster)
-uv pip install -r requirements.txt
-
-# Run the setup wizard
-python setup_wizard.py
-```
-
-### Quick Setup (Automated)
+Clone and run the automated setup script:
 
 **Windows:**
 ```bash
+git clone git@github.com:conradstorz/My_River_Level.git
+cd My_River_Level
 setup.bat
 ```
 
 **Linux/Mac:**
 ```bash
+git clone git@github.com:conradstorz/My_River_Level.git
+cd My_River_Level
 chmod +x setup.sh
 ./setup.sh
 ```
 
-These scripts will automatically create a virtual environment and install all dependencies.
+The setup script will automatically:
+- Create a virtual environment
+- Install all dependencies
+- Guide you to run the setup wizard
+
+Then run the configuration wizard:
+```bash
+python setup_wizard.py
+```
+
+### Manual Setup (Advanced)
+
+If you prefer manual control:
+
+**Option 1: Using venv (built-in)**
+```bash
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# Windows:
+venv\Scripts\activate
+# Linux/Mac:
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+**Option 2: Using uv (faster)**
+```bash
+# Install uv first: pip install uv
+
+# Create virtual environment
+uv venv
+
+# Activate virtual environment
+# Windows:
+.venv\Scripts\activate
+# Linux/Mac:
+source .venv/bin/activate
+
+# Install dependencies
+uv pip install -r requirements.txt
+```
 
 ### Verifying Installation
 ```bash
@@ -95,20 +96,22 @@ python -c "import dataretrieval; print('✓ Dependencies installed successfully'
 ```
 
 ### Deactivating Virtual Environment
-When you're done, deactivate the virtual environment:
+When you're done:
 ```bash
 deactivate
 ```
-   
-The wizard will:
+
+## Configuration
+
+The setup wizard (recommended) will:
 - Help you find your location (by address or coordinates)
 - Search for nearby USGS stream gauges
 - Let you select which gauges to monitor
-- Automatically configure the system
+- Automatically save configuration
 
-## Alternative: Manual Configuration
+### Manual Configuration (Alternative)
 
-Edit `config.py` to set up your monitoring:
+If you prefer to manually edit configuration:
 
 ### Option 1: Monitor specific gauges
 ```python
