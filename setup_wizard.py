@@ -247,14 +247,14 @@ VERY_HIGH_PERCENTILE = 95  # Severe flood
 # 00065 = Gage height in feet
 PARAMETER_CODE = "00060"  # Discharge
 
-# Historical dconfig_file, 'w') as f:
+# Historical data range for calculating statistics
+HISTORICAL_START_YEAR = 1980
+'''
+    
+    with open(config_file, 'w') as f:
         f.write(config_content)
     
-    print(f"\n✓ Configuration saved to {config_file}
-    with open('config.py', 'w') as f:
-        f.write(config_content)
-    
-    print("\n✓ Configuration saved to config.py")
+    print(f"\n✓ Configuration saved to {config_file}")
 
 
 def run_wizard(config_name='config'):
