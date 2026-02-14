@@ -23,7 +23,7 @@ class RiverMonitor:
         Args:
             site_numbers: List of USGS site numbers to monitor
         """
-        self.site_numbers = site_numbers or config.MONITORING_SITES
+        self.site_numbers = site_numbers if site_numbers else []
         
     def find_nearby_sites(self, latitude, longitude, radius_miles=25):
         """
