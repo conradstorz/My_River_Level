@@ -97,26 +97,52 @@ def find_nearby_gauges(latitude, longitude, radius_miles=50):
         print(f"\n🔍 Searching for gauges within {radius_miles} miles...")
         
         # Convert miles to decimal degrees (approximate)
-        radius_dd = radius_miles / 69.0
+        # 1 degree latitude = ~69 miles
+        # 1 degree longitude varies by latitude, using cosine approximation
+        import math
+        lat_offset = radius_miles / 69.0
+        lon_offset = radius_miles / (69.0 * math.cos(math.radians(latitude)))
+        
+        west = longitude - lon_offset
+        south = latitude - lat_offset
+        east = longitude + lon_offset
+        north = latitude + lat_offset
+        
+        # Format bounding box string (USGS format: west,south,east,north)
+        bbox_str = f"{west:.6f},{south:.6f},{east:.6f},{north:.6f}"
+        
+        print(f"   Searching area: {bbox_str}")
         
         # Find sites with discharge data
         sites = nwis.what_sites(
-            bBox=f"{longitude - radius_dd},{latitude - radius_dd},"
-                  f"{longitude + radius_dd},{latitude + radius_dd}",
+            bBox=bbox_str,
             parameterCd="00060",  # Discharge
-            siteStatus="active",
-            hasDataTypeCd="dv"  # Daily values
+            siteStatus="active"
         )
         
         if len(sites) == 0:
             print("✗ No active gauges found in this area")
+            print("   Try increasing the search radius or checking a different location")
             return None
             
         print(f"✓ Found {len(sites)} active stream gauges")
+        
+        # Filter to only sites that likely have streamflow data
+        # Check if site type includes stream-related codes
+        if 'site_tp_cd' in sites.columns:
+            stream_sites = sites[sites['site_tp_cd'].str.contains('ST', na=False)]
+            if len(stream_sites) > 0:
+                print(f"   ({len(stream_sites)} are stream gauges)")
+                return stream_sites
+        
         return sites
         
     except Exception as e:
         print(f"✗ Error finding gauges: {e}")
+        print("\n   Troubleshooting:")
+        print("   - Try a smaller search radius (e.g., 25 miles)")
+        print("   - The USGS service may be temporarily unavailable")
+        print("   - You can manually find gauges at: https://waterdata.usgs.gov/")
         return None
 
 
