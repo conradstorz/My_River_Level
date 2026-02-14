@@ -21,16 +21,83 @@ Reference: https://waterdata.usgs.gov/blog/wdfn-stats-delivery/
 
 ## Installation
 
-1. Install Python 3.8 or higher
+### Prerequisites
+- Python 3.8 or higher
+- Git (for cloning the repository)
 
-2. Install dependencies:
+### Setup with Virtual Environment (Recommended)
+
+**Option 1: Using venv (built-in)**
 ```bash
+# Clone the repository
+git clone git@github.com:conradstorz/My_River_Level.git
+cd My_River_Level
+
+# Create virtual environment
+python -m venv venv
+
+# Activate virtual environment
+# On Windows:
+venv\Scripts\activate
+# On Linux/Mac:
+source venv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Run the setup wizard
+python setup_wizard.py
 ```
 
-3. Run the interactive setup wizard:
+**Option 2: Using uv (faster alternative)**
 ```bash
+# Install uv if you don't have it
+pip install uv
+
+# Clone the repository
+git clone git@github.com:conradstorz/My_River_Level.git
+cd My_River_Level
+
+# Create virtual environment with uv
+uv venv
+
+# Activate virtual environment
+# On Windows:
+.venv\Scripts\activate
+# On Linux/Mac:
+source .venv/bin/activate
+
+# Install dependencies with uv (much faster)
+uv pip install -r requirements.txt
+
+# Run the setup wizard
 python setup_wizard.py
+```
+
+### Quick Setup (Automated)
+
+**Windows:**
+```bash
+setup.bat
+```
+
+**Linux/Mac:**
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+These scripts will automatically create a virtual environment and install all dependencies.
+
+### Verifying Installation
+```bash
+python -c "import dataretrieval; print('✓ Dependencies installed successfully')"
+```
+
+### Deactivating Virtual Environment
+When you're done, deactivate the virtual environment:
+```bash
+deactivate
 ```
    
 The wizard will:
