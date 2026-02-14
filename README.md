@@ -44,15 +44,14 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-The setup script will automatically:
-- Create a virtual environment
-- Install all dependencies
-- Guide you to run the setup wizard
+The setup script will automatically create a virtual environment and install all dependencies.
 
-Then run the configuration wizard:
+**That's it!** Now just run:
 ```bash
-python setup_wizard.py
+python river_monitor.py
 ```
+
+The monitor will detect it's the first run and automatically offer to launch the setup wizard to help you configure your monitoring location.
 
 ### Manual Setup (Advanced)
 
