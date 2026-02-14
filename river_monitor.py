@@ -392,7 +392,7 @@ def main():
             return
     
     # Initialize monitor with the loaded config
-    monitor = RiverMonitor(config.MONITORING_SITES)
+    monitor = RiverMonitor(config.MONITORING_SITES, config)
     
     # If location is configured, find nearby sites
     if config.LOCATION['latitude'] and config.LOCATION['longitude']:
