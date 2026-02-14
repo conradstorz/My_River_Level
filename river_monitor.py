@@ -16,14 +16,16 @@ import importlib.util
 class RiverMonitor:
     """Monitor river conditions using USGS gauge data"""
     
-    def __init__(self, site_numbers=None):
+    def __init__(self, site_numbers=None, config_module=None):
         """
         Initialize the river monitor
         
         Args:
             site_numbers: List of USGS site numbers to monitor
+            config_module: Configuration module with settings
         """
         self.site_numbers = site_numbers if site_numbers else []
+        self.config = config_module
         
     def find_nearby_sites(self, latitude, longitude, radius_miles=25):
         """
@@ -45,7 +47,7 @@ class RiverMonitor:
             sites = nwis.what_sites(
                 bBox=f"{longitude - radius_dd},{latitude - radius_dd},"
                       f"{longitude + radius_dd},{latitude + radius_dd}",
-                parameterCd=config.PARAMETER_CODE,
+                parameterCd=self.config.PARAMETER_CODE if self.config else "00060",
                 siteStatus="active"
             )
             
@@ -72,7 +74,7 @@ class RiverMonitor:
             
             df, _ = nwis.get_iv(
                 sites=site_number,
-                parameterCd=config.PARAMETER_CODE,
+                parameterCd=self.config.PARAMETER_CODE if self.config else "00060",
                 start=start_date.strftime('%Y-%m-%d'),
                 end=end_date.strftime('%Y-%m-%d')
             )
@@ -95,13 +97,13 @@ class RiverMonitor:
             DataFrame with historical data
         """
         try:
-            start_year = start_year or config.HISTORICAL_START_YEAR
+            start_year = start_year or (self.config.HISTORICAL_START_YEAR if self.config else 1980)
             start_date = f"{start_year}-01-01"
             end_date = datetime.now().strftime('%Y-%m-%d')
             
             df, _ = nwis.get_dv(
                 sites=site_number,
-                parameterCd=config.PARAMETER_CODE,
+                parameterCd=self.config.PARAMETER_CODE if self.config else "00060",
                 start=start_date,
                 end=end_date
             )
@@ -150,13 +152,19 @@ class RiverMonitor:
         if percentile is None:
             return "UNKNOWN", "Insufficient data"
         
-        if percentile <= config.VERY_LOW_PERCENTILE:
+        # Use config thresholds if available, otherwise use defaults
+        very_low = self.config.VERY_LOW_PERCENTILE if self.config else 5
+        low = self.config.LOW_FLOW_PERCENTILE if self.config else 10
+        high = self.config.HIGH_FLOW_PERCENTILE if self.config else 90
+        very_high = self.config.VERY_HIGH_PERCENTILE if self.config else 95
+        
+        if percentile <= very_low:
             return "SEVERE LOW", "Severe drought conditions"
-        elif percentile <= config.LOW_FLOW_PERCENTILE:
+        elif percentile <= low:
             return "LOW", "Below normal flow (drought)"
-        elif percentile >= config.VERY_HIGH_PERCENTILE:
+        elif percentile >= very_high:
             return "SEVERE HIGH", "Severe flood conditions"
-        elif percentile >= config.HIGH_FLOW_PERCENTILE:
+        elif percentile >= high:
             return "HIGH", "Above normal flow (flood risk)"
         else:
             return "NORMAL", "Normal flow conditions"
