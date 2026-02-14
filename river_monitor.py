@@ -41,12 +41,23 @@ class RiverMonitor:
         """
         try:
             # Convert miles to decimal degrees (approximate)
-            radius_dd = radius_miles / 69.0
+            # 1 degree latitude = ~69 miles
+            # 1 degree longitude varies by latitude, using cosine approximation
+            import math
+            lat_offset = radius_miles / 69.0
+            lon_offset = radius_miles / (69.0 * math.cos(math.radians(latitude)))
+            
+            west = longitude - lon_offset
+            south = latitude - lat_offset
+            east = longitude + lon_offset
+            north = latitude + lat_offset
+            
+            # Format bounding box string (USGS format: west,south,east,north)
+            bbox_str = f"{west:.6f},{south:.6f},{east:.6f},{north:.6f}"
             
             # Find sites within bounding box
-            sites = nwis.what_sites(
-                bBox=f"{longitude - radius_dd},{latitude - radius_dd},"
-                      f"{longitude + radius_dd},{latitude + radius_dd}",
+            sites, _ = nwis.what_sites(
+                bBox=bbox_str,
                 parameterCd=self.config.PARAMETER_CODE if self.config else "00060",
                 siteStatus="active"
             )
@@ -128,8 +139,8 @@ class RiverMonitor:
         if historical_df is None or len(historical_df) == 0:
             return None
             
-        # Get all historical values
-        values = historical_df.iloc[:, 0].values
+        # Get all historical values and convert to numeric
+        values = pd.to_numeric(historical_df.iloc[:, 0], errors='coerce').values
         values = values[~np.isnan(values)]
         
         if len(values) == 0:
@@ -186,9 +197,14 @@ class RiverMonitor:
         if current_df is None or len(current_df) == 0:
             return None
         
-        # Get most recent value
-        current_value = current_df.iloc[-1, 0]
+        # Get most recent value (convert to numeric)
+        current_value = pd.to_numeric(current_df.iloc[-1, 0], errors='coerce')
         current_time = current_df.index[-1]
+        
+        # Check if current value is valid
+        if pd.isna(current_value):
+            print(f"  No valid current data available")
+            return None
         
         # Get historical data
         historical_df = self.get_historical_data(site_number)
@@ -199,9 +215,14 @@ class RiverMonitor:
         percentile = self.calculate_percentiles(historical_df, current_value)
         severity, description = self.classify_condition(percentile)
         
-        # Get statistics
-        values = historical_df.iloc[:, 0].values
+        # Get statistics (convert to numeric)
+        values = pd.to_numeric(historical_df.iloc[:, 0], errors='coerce').values
         values = values[~np.isnan(values)]
+        
+        # Check if we have valid historical data
+        if len(values) == 0:
+            print(f"  No valid historical data available")
+            return None
         
         result = {
             'site_number': site_number,

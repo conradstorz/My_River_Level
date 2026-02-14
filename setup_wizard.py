@@ -114,7 +114,7 @@ def find_nearby_gauges(latitude, longitude, radius_miles=50):
         print(f"   Searching area: {bbox_str}")
         
         # Find sites with discharge data
-        sites = nwis.what_sites(
+        sites, _ = nwis.what_sites(
             bBox=bbox_str,
             parameterCd="00060",  # Discharge
             siteStatus="active"
