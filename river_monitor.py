@@ -7,6 +7,8 @@ import dataretrieval.nwis as nwis
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+import os
+import sys
 import config
 
 
@@ -259,8 +261,61 @@ class RiverMonitor:
         print("="*80 + "\n")
 
 
+def check_first_run():
+    """
+    Check if this is the first run and configuration is needed
+    
+    Returns:
+        True if setup is needed, False otherwise
+    """
+    # Check if config has monitoring sites or location
+    if not config.MONITORING_SITES and not (config.LOCATION['latitude'] and config.LOCATION['longitude']):
+        return True
+    return False
+
+
 def main():
     """Main execution function"""
+    
+    # Check if setup is needed
+    if check_first_run():
+        print("\n" + "="*80)
+        print("⚠️  FIRST RUN DETECTED")
+        print("="*80)
+        print("\nNo monitoring sites configured.")
+        print("\nWould you like to run the setup wizard? (y/n)")
+        print("This will help you find and configure stream gauges to monitor.")
+        print("="*80)
+        
+        response = input("\nRun setup wizard? (y/n): ").strip().lower()
+        
+        if response == 'y':
+            print("\n🚀 Launching setup wizard...\n")
+            
+            # Import and run setup wizard
+            try:
+                import setup_wizard
+                success = setup_wizard.run_wizard()
+                
+                if not success:
+                    print("\n⚠️  Setup not completed. Exiting.")
+                    return
+                
+                # Reload config after setup
+                import importlib
+                importlib.reload(config)
+                
+            except ImportError:
+                print("\n✗ Error: setup_wizard.py not found")
+                print("Please run: python setup_wizard.py")
+                return
+            except Exception as e:
+                print(f"\n✗ Error during setup: {e}")
+                return
+        else:
+            print("\n⚠️  Please configure MONITORING_SITES or LOCATION in config.py")
+            print("Or run: python setup_wizard.py")
+            return
     
     # Initialize monitor
     monitor = RiverMonitor()

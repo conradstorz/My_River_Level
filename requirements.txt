@@ -11,3 +11,6 @@ requests
 
 # Visualization (optional)
 matplotlib
+
+# Interactive setup
+colorama

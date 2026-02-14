@@ -28,7 +28,18 @@ Reference: https://waterdata.usgs.gov/blog/wdfn-stats-delivery/
 pip install -r requirements.txt
 ```
 
-## Configuration
+3. Run the interactive setup wizard:
+```bash
+python setup_wizard.py
+```
+   
+The wizard will:
+- Help you find your location (by address or coordinates)
+- Search for nearby USGS stream gauges
+- Let you select which gauges to monitor
+- Automatically configure the system
+
+## Alternative: Manual Configuration
 
 Edit `config.py` to set up your monitoring:
 
@@ -61,7 +72,37 @@ VERY_HIGH_PERCENTILE = 95  # Severe flood
 
 ## Usage
 
-Run the monitor:
+### First Run
+
+On first run, the monitor will automatically prompt you to run the setup wizard:
+
+```bash
+python river_monitor.py
+```
+
+If you haven't configured any gauges, you'll see:
+```
+⚠️  FIRST RUN DETECTED
+Would you like to run the setup wizard? (y/n)
+```
+
+### Running the Setup Wizard Manually
+
+You can re-run the setup wizard anytime:
+
+```bash
+python setup_wizard.py
+```
+
+The wizard provides an interactive experience:
+1. **Location Entry**: Enter an address or coordinates
+2. **Gauge Search**: Finds active USGS gauges nearby
+3. **Gauge Selection**: Preview and select gauges to monitor
+4. **Auto-Configuration**: Saves settings to config.py
+
+### Running the Monitor
+
+After configuration, simply run:
 ```bash
 python river_monitor.py
 ```
@@ -112,6 +153,7 @@ Summary: 1 of 2 sites show extreme conditions
 ```
 My_River_level/
 ├── river_monitor.py     # Main monitoring script
+├── setup_wizard.py      # Interactive setup tool
 ├── config.py            # Configuration settings
 ├── requirements.txt     # Python dependencies
 └── README.md           # This file
