@@ -342,7 +342,13 @@ def run_wizard(config_name='config'):
         print("STEP 4: SAVE CONFIGURATION")
         print("-"*80)
         print(f"\n✓ Selected {len(selected_sites)} gauge(s):")
-        for site_no in selected_sites:, config_name)
+        for site_no in selected_sites:
+            print(f"  - {site_no}")
+        
+        confirm = input("\nSave this configuration? (y/n): ").strip().lower()
+        
+        if confirm == 'y':
+            save_configuration(selected_sites, latitude, longitude, radius, config_name)
             
             print("\n" + "="*80)
             print("✓ SETUP COMPLETE!")
@@ -371,8 +377,14 @@ def run_wizard(config_name='config'):
         print("⚠️  SETUP INCOMPLETE")
         print("="*80)
         print("\nNo gauges were selected. Please:")
-        print(f"1. Edit {config_name}, latitude, longitude, 25)
+        print(f"1. Edit {config_name}.py to add MONITORING_SITES")
+        print("2. Or run setup_wizard.py again")
+        print("="*80 + "\n")
         
+        return False
+
+
+if __name__ == "__main__":
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='River Level Monitor Setup Wizard')
     parser.add_argument('--config', '-c', default='config',
@@ -411,19 +423,7 @@ def run_wizard(config_name='config'):
             sys.exit(0)
     
     try:
-        run_wizard(config_name=args.configSETUP INCOMPLETE")
-        print("="*80)
-        print("\nNo gauges were selected. Please:")
-        print("1. Edit config.py to add MONITORING_SITES")
-        print("2. Or run setup_wizard.py again")
-        print("="*80 + "\n")
-        
-        return False
-
-
-if __name__ == "__main__":
-    try:
-        run_wizard()
+        run_wizard(config_name=args.config)
     except KeyboardInterrupt:
         print("\n\n✗ Setup cancelled by user")
         sys.exit(1)
