@@ -26,6 +26,7 @@ class RiverMonitor:
         """
         self.site_numbers = site_numbers if site_numbers else []
         self.config = config_module
+        self.site_info_cache = {}  # Cache for site information
         
     def find_nearby_sites(self, latitude, longitude, radius_miles=25):
         """
@@ -62,7 +63,6 @@ class RiverMonitor:
                 siteStatus="active"
             )
             
-            print(f"\nFound {len(sites)} active gauges within {radius_miles} miles")
             return sites
             
         except Exception as e:
@@ -83,14 +83,29 @@ class RiverMonitor:
             end_date = datetime.now()
             start_date = end_date - timedelta(days=7)
             
+            param_code = self.config.PARAMETER_CODE if self.config else "00060"
+            
             df, _ = nwis.get_iv(
                 sites=site_number,
-                parameterCd=self.config.PARAMETER_CODE if self.config else "00060",
+                parameterCd=param_code,
                 start=start_date.strftime('%Y-%m-%d'),
                 end=end_date.strftime('%Y-%m-%d')
             )
             
-            return df
+            # Check if we got valid data
+            if df is None or len(df) == 0:
+                return None
+            
+            # Find the column with the parameter data
+            # Columns are typically named like '00060' or '00060_00000'
+            param_cols = [col for col in df.columns if col.startswith(param_code)]
+            
+            if not param_cols:
+                print(f"  Warning: No column found for parameter {param_code}")
+                return None
+            
+            # Return only the parameter column(s)
+            return df[param_cols]
             
         except Exception as e:
             print(f"Error getting current data for site {site_number}: {e}")
@@ -112,18 +127,89 @@ class RiverMonitor:
             start_date = f"{start_year}-01-01"
             end_date = datetime.now().strftime('%Y-%m-%d')
             
+            param_code = self.config.PARAMETER_CODE if self.config else "00060"
+            
             df, _ = nwis.get_dv(
                 sites=site_number,
-                parameterCd=self.config.PARAMETER_CODE if self.config else "00060",
+                parameterCd=param_code,
                 start=start_date,
                 end=end_date
             )
             
-            return df
+            # Check if we got valid data
+            if df is None or len(df) == 0:
+                return None
+            
+            # Find the column with the parameter data
+            # For daily values, columns are typically named like '00060_Mean'
+            param_cols = [col for col in df.columns if param_code in col]
+            
+            if not param_cols:
+                print(f"  Warning: No column found for parameter {param_code}")
+                return None
+            
+            # Return only the parameter column(s)
+            return df[param_cols]
             
         except Exception as e:
             print(f"Error getting historical data for site {site_number}: {e}")
             return None
+    
+    def get_site_info(self, site_number):
+        """
+        Get site information including station name
+        
+        Args:
+            site_number: USGS site number
+            
+        Returns:
+            Dictionary with site information
+        """
+        # Check cache first
+        if site_number in self.site_info_cache:
+            return self.site_info_cache[site_number]
+        
+        try:
+            # Get site information
+            site_info, _ = nwis.get_info(sites=site_number)
+            
+            if site_info is not None and len(site_info) > 0:
+                info = {
+                    'site_number': site_number,
+                    'station_name': site_info.iloc[0]['station_nm'] if 'station_nm' in site_info.columns else f"Site {site_number}"
+                }
+                self.site_info_cache[site_number] = info
+                return info
+            else:
+                # Fallback if no info available
+                info = {'site_number': site_number, 'station_name': f"Site {site_number}"}
+                self.site_info_cache[site_number] = info
+                return info
+                
+        except Exception as e:
+            print(f"  Warning: Could not get site info: {e}")
+            info = {'site_number': site_number, 'station_name': f"Site {site_number}"}
+            self.site_info_cache[site_number] = info
+            return info
+    
+    def get_parameter_unit(self):
+        """
+        Get the unit label for the configured parameter
+        
+        Returns:
+            String unit label (e.g., 'cfs' or 'ft')
+        """
+        param_code = self.config.PARAMETER_CODE if self.config else "00060"
+        
+        # Common USGS parameter codes and their units
+        units = {
+            "00060": "cfs",  # Discharge (cubic feet per second)
+            "00065": "ft",   # Gage height (feet)
+            "00010": "°C",   # Temperature (Celsius)
+            "00045": "in",   # Precipitation (inches)
+        }
+        
+        return units.get(param_code, "units")
     
     def calculate_percentiles(self, historical_df, current_value):
         """
@@ -141,7 +227,8 @@ class RiverMonitor:
             
         # Get all historical values and convert to numeric
         values = pd.to_numeric(historical_df.iloc[:, 0], errors='coerce').values
-        values = values[~np.isnan(values)]
+        # Filter out NaN values and USGS error codes (negative values)
+        values = values[~np.isnan(values) & (values >= 0)]
         
         if len(values) == 0:
             return None
@@ -170,15 +257,15 @@ class RiverMonitor:
         very_high = self.config.VERY_HIGH_PERCENTILE if self.config else 95
         
         if percentile <= very_low:
-            return "SEVERE LOW", "Severe drought conditions"
+            return "SEVERE LOW", "Severe drought - critically low level"
         elif percentile <= low:
-            return "LOW", "Below normal flow (drought)"
+            return "LOW", "Below normal level (drought)"
         elif percentile >= very_high:
-            return "SEVERE HIGH", "Severe flood conditions"
+            return "SEVERE HIGH", "Severe flood - critically high level"
         elif percentile >= high:
-            return "HIGH", "Above normal flow (flood risk)"
+            return "HIGH", "Above normal level (flood risk)"
         else:
-            return "NORMAL", "Normal flow conditions"
+            return "NORMAL", "Normal level"
     
     def check_site_conditions(self, site_number):
         """
@@ -192,18 +279,23 @@ class RiverMonitor:
         """
         print(f"\nChecking site {site_number}...")
         
+        # Get site information
+        site_info = self.get_site_info(site_number)
+        
         # Get current data
         current_df = self.get_current_data(site_number)
         if current_df is None or len(current_df) == 0:
             return None
         
-        # Get most recent value (convert to numeric)
+        # Get most recent value from the first (parameter) column
+        # The dataframe now contains only parameter columns
         current_value = pd.to_numeric(current_df.iloc[-1, 0], errors='coerce')
         current_time = current_df.index[-1]
         
         # Check if current value is valid
-        if pd.isna(current_value):
-            print(f"  No valid current data available")
+        # USGS uses -999999 or similar negative values as error codes
+        if pd.isna(current_value) or current_value < 0:
+            print(f"  No valid current data available (value: {current_value})")
             return None
         
         # Get historical data
@@ -215,17 +307,23 @@ class RiverMonitor:
         percentile = self.calculate_percentiles(historical_df, current_value)
         severity, description = self.classify_condition(percentile)
         
-        # Get statistics (convert to numeric)
+        # Get statistics from the first (parameter) column
+        # The dataframe now contains only parameter columns
         values = pd.to_numeric(historical_df.iloc[:, 0], errors='coerce').values
-        values = values[~np.isnan(values)]
+        # Filter out NaN values and USGS error codes (negative values)
+        values = values[~np.isnan(values) & (values >= 0)]
         
         # Check if we have valid historical data
         if len(values) == 0:
             print(f"  No valid historical data available")
             return None
         
+        # Get parameter unit
+        unit = self.get_parameter_unit()
+        
         result = {
             'site_number': site_number,
+            'station_name': site_info['station_name'],
             'current_value': current_value,
             'current_time': current_time,
             'percentile': percentile,
@@ -234,6 +332,7 @@ class RiverMonitor:
             'historical_min': np.min(values),
             'historical_max': np.max(values),
             'historical_median': np.median(values),
+            'unit': unit,
         }
         
         return result
@@ -254,37 +353,44 @@ class RiverMonitor:
         
         return results
     
-    def print_report(self, results):
+    def print_report(self, results, nearby_sites=None):
         """
         Print a formatted report of conditions
         
         Args:
             results: List of condition dictionaries
+            nearby_sites: Optional DataFrame of nearby sites (only shown if extreme conditions exist)
         """
+        # Check if any extreme conditions exist
+        extreme_count = sum(1 for r in results if r['severity'] in ['SEVERE LOW', 'SEVERE HIGH', 'LOW', 'HIGH'])
+        
+        # Only show nearby sites if there are extreme conditions
+        if extreme_count > 0 and nearby_sites is not None:
+            print("\nNearby Sites:")
+            print(nearby_sites[['site_no', 'station_nm']].to_string())
+        
         print("\n" + "="*80)
         print("RIVER LEVEL EXTREME CONDITIONS REPORT")
         print(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("="*80)
         
-        extreme_count = 0
-        
         for result in results:
             is_extreme = result['severity'] in ['SEVERE LOW', 'SEVERE HIGH', 'LOW', 'HIGH']
             
             if is_extreme:
-                extreme_count += 1
                 marker = "⚠️ ALERT" if 'SEVERE' in result['severity'] else "⚡ WARNING"
             else:
                 marker = "✓"
             
-            print(f"\n{marker} Site: {result['site_number']}")
-            print(f"  Current Value: {result['current_value']:.2f} cfs")
+            print(f"\n{marker} {result['station_name']}")
+            print(f"  Site Number: {result['site_number']}")
+            print(f"  Current Level: {result['current_value']:.2f} {result['unit']}")
             print(f"  As of: {result['current_time']}")
             print(f"  Condition: {result['severity']} ({result['description']})")
             print(f"  Percentile: {result['percentile']:.1f}%")
             print(f"  Historical Range: {result['historical_min']:.2f} - "
-                  f"{result['historical_max']:.2f} cfs")
-            print(f"  Historical Median: {result['historical_median']:.2f} cfs")
+                  f"{result['historical_max']:.2f} {result['unit']}")
+            print(f"  Historical Median: {result['historical_median']:.2f} {result['unit']}")
         
         print("\n" + "="*80)
         print(f"Summary: {extreme_count} of {len(results)} sites show extreme conditions")
@@ -415,9 +521,11 @@ def main():
     # Initialize monitor with the loaded config
     monitor = RiverMonitor(config.MONITORING_SITES, config)
     
-    # If location is configured, find nearby sites
+    # Store nearby sites for potential display later
+    nearby_sites = None
+    
+    # If location is configured, find nearby sites (but don't display yet)
     if config.LOCATION['latitude'] and config.LOCATION['longitude']:
-        print("Finding nearby gauges...")
         nearby_sites = monitor.find_nearby_sites(
             config.LOCATION['latitude'],
             config.LOCATION['longitude'],
@@ -425,9 +533,6 @@ def main():
         )
         
         if nearby_sites is not None and len(nearby_sites) > 0:
-            print("\nNearby Sites:")
-            print(nearby_sites[['site_no', 'station_nm']].to_string())
-            
             # Use the first few sites if none configured
             if not monitor.site_numbers:
                 monitor.site_numbers = nearby_sites['site_no'].head(5).tolist()
@@ -443,9 +548,9 @@ def main():
     # Monitor all sites
     results = monitor.monitor_all_sites()
     
-    # Print report
+    # Print report (nearby sites will only be shown if extreme conditions exist)
     if results:
-        monitor.print_report(results)
+        monitor.print_report(results, nearby_sites)
     else:
         print("No data available for configured sites")
 
