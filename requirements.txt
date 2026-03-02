@@ -14,3 +14,17 @@ matplotlib
 
 # Interactive setup
 colorama
+
+# Windows Service
+pywin32
+
+# Web portal
+flask
+
+# Notification channels
+python-telegram-bot>=20.0
+twilio
+
+# Testing
+pytest
+pytest-mock
