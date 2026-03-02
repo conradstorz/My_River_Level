@@ -1,6 +1,6 @@
 import threading
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from db.models import get_db, get_setting
 
@@ -34,8 +34,10 @@ def is_reminder_due(site_id, severity, db_path=None):
     if row is None:
         return True
 
-    last_sent = datetime.fromisoformat(row["sent_at"])
-    return datetime.utcnow() - last_sent >= timedelta(hours=interval_hours)
+    last_sent_str = row["sent_at"]
+    # SQLite datetime('now') returns UTC without timezone suffix — parse as UTC
+    last_sent = datetime.fromisoformat(last_sent_str).replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - last_sent >= timedelta(hours=interval_hours)
 
 
 def get_current_site_severities(db_path=None):
@@ -72,9 +74,12 @@ class SchedulerThread(threading.Thread):
         logger.info("SchedulerThread stopped")
 
     def _check_reminders(self):
-        for site in get_current_site_severities(self.db_path):
-            if is_reminder_due(site["site_id"], site["severity"], self.db_path):
-                self.notification_queue.put({
-                    "type": "reminder",
-                    "data": site,
-                })
+        try:
+            for site in get_current_site_severities(self.db_path):
+                if is_reminder_due(site["site_id"], site["severity"], self.db_path):
+                    self.notification_queue.put({
+                        "type": "reminder",
+                        "data": site,
+                    })
+        except Exception:
+            logger.exception("Error checking reminders")
