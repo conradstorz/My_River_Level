@@ -1,6 +1,5 @@
 # USGS Water Data Tools
 dataretrieval
-hyswap
 
 # Data Analysis
 pandas

@@ -1,7 +1,4 @@
 import pytest
-import sqlite3
-import tempfile
-import os
 
 @pytest.fixture
 def tmp_db(tmp_path):
