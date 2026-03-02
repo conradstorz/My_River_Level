@@ -24,7 +24,7 @@ class FacebookAdapter:
         try:
             response = req.post(
                 SEND_API_URL,
-                params={"access_token": token},
+                headers={"Authorization": f"Bearer {token}"},
                 json={
                     "recipient": {"id": psid},
                     "message": {"text": message}
