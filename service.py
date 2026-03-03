@@ -113,7 +113,8 @@ def run_service(db_path=None, stop_event=None):
 
     # Separate thread-based adapters (Telegram) from plain adapters
     thread_adapters = [a for a in all_adapters if isinstance(a, threading.Thread)]
-    plain_adapters = [a for a in all_adapters if not isinstance(a, threading.Thread)]
+    # All adapters go to dispatcher (including Telegram which is also a Thread)
+    plain_adapters = all_adapters
 
     from monitor.polling import PollingThread
     from monitor.scheduler import SchedulerThread
