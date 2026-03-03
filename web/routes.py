@@ -1,6 +1,25 @@
 from flask import render_template, current_app, request, redirect, url_for, flash
 from db.models import get_db, get_setting, set_setting
 
+SETTINGS_FIELDS = [
+    ("poll_interval_minutes", "Poll Interval (minutes)", "number"),
+    ("low_percentile", "Low Flow Percentile", "number"),
+    ("high_percentile", "High Flow Percentile", "number"),
+    ("very_low_percentile", "Very Low Percentile", "number"),
+    ("very_high_percentile", "Very High Percentile", "number"),
+    ("reminder_low_high_hours", "Reminder Interval: LOW/HIGH (hours)", "number"),
+    ("reminder_severe_hours", "Reminder Interval: SEVERE (hours)", "number"),
+    ("historical_start_year", "Historical Start Year", "number"),
+    ("search_radius_miles", "Search Radius (miles)", "number"),
+    ("telegram_bot_token", "Telegram Bot Token", "password"),
+    ("twilio_account_sid", "Twilio Account SID", "text"),
+    ("twilio_auth_token", "Twilio Auth Token", "password"),
+    ("twilio_sms_number", "Twilio SMS Number", "text"),
+    ("twilio_whatsapp_number", "Twilio WhatsApp Number", "text"),
+    ("facebook_page_token", "Facebook Page Token", "password"),
+    ("facebook_verify_token", "Facebook Verify Token", "text"),
+]
+
 
 def register_routes(app):
 
@@ -164,7 +183,15 @@ def register_routes(app):
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
-        return render_template("settings.html", fields=[], current={})
+        db_path = current_app.config["DB_PATH"]
+        if request.method == "POST":
+            for key, _, _ in SETTINGS_FIELDS:
+                value = request.form.get(key, "")
+                set_setting(key, value, db_path)
+            flash("Settings saved.", "success")
+            return redirect(url_for("settings"))
+        current = {key: get_setting(key, db_path, default="") for key, _, _ in SETTINGS_FIELDS}
+        return render_template("settings.html", fields=SETTINGS_FIELDS, current=current)
 
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():
