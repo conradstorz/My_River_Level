@@ -195,4 +195,21 @@ def register_routes(app):
 
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():
+        db_path = current_app.config["DB_PATH"]
+        notification_queue = current_app.config.get("NOTIFICATION_QUEUE")
+        if request.method == "POST":
+            message = request.form.get("message", "").strip()
+            channels = request.form.getlist("channels")
+            if message and notification_queue is not None:
+                notification_queue.put({
+                    "type": "broadcast",
+                    "data": {
+                        "message": message,
+                        "channels": channels,
+                    }
+                })
+                flash("Broadcast queued.", "success")
+            elif not message:
+                flash("Message cannot be empty.", "danger")
+            return redirect(url_for("broadcast"))
         return render_template("broadcast.html")
