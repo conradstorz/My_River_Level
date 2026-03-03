@@ -118,7 +118,49 @@ def register_routes(app):
 
     @app.route("/sites")
     def sites():
-        return render_template("sites.html", sites=[])
+        db_path = current_app.config["DB_PATH"]
+        conn = get_db(db_path)
+        all_sites = conn.execute("SELECT * FROM sites ORDER BY station_name").fetchall()
+        conn.close()
+        return render_template("sites.html", sites=all_sites)
+
+    @app.route("/sites/add", methods=["POST"])
+    def add_site():
+        db_path = current_app.config["DB_PATH"]
+        site_number = request.form.get("site_number", "").strip()
+        station_name = request.form.get("station_name", "").strip()
+        param_code = request.form.get("parameter_code", "00060").strip()
+        if site_number:
+            conn = get_db(db_path)
+            conn.execute(
+                "INSERT OR IGNORE INTO sites (site_number, station_name, parameter_code) VALUES (?,?,?)",
+                (site_number, station_name, param_code)
+            )
+            conn.commit()
+            conn.close()
+            flash(f"Site {site_number} added.", "success")
+        else:
+            flash("Site number is required.", "danger")
+        return redirect(url_for("sites"))
+
+    @app.route("/sites/<int:site_id>/toggle", methods=["POST"])
+    def toggle_site(site_id):
+        db_path = current_app.config["DB_PATH"]
+        conn = get_db(db_path)
+        conn.execute("UPDATE sites SET active = 1 - active WHERE id=?", (site_id,))
+        conn.commit()
+        conn.close()
+        return redirect(url_for("sites"))
+
+    @app.route("/sites/<int:site_id>/remove", methods=["POST"])
+    def remove_site(site_id):
+        db_path = current_app.config["DB_PATH"]
+        conn = get_db(db_path)
+        conn.execute("DELETE FROM sites WHERE id=?", (site_id,))
+        conn.commit()
+        conn.close()
+        flash("Site removed.", "success")
+        return redirect(url_for("sites"))
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():

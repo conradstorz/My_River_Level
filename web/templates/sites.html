@@ -1,3 +1,47 @@
 {% extends "base.html" %}
 {% block title %}Sites{% endblock %}
-{% block content %}<h1>Sites</h1>{% endblock %}
+{% block content %}
+<h1 class="mb-4">Monitored Sites</h1>
+
+<h4>Add Site by USGS Number</h4>
+<form method="post" action="/sites/add" class="row g-2 mb-4">
+  <div class="col-md-3"><input name="site_number" class="form-control" placeholder="USGS Site # (e.g. 03277200)" required></div>
+  <div class="col-md-4"><input name="station_name" class="form-control" placeholder="Station name (optional)"></div>
+  <div class="col-md-2">
+    <select name="parameter_code" class="form-select">
+      <option value="00060">Discharge (cfs)</option>
+      <option value="00065">Gage height (ft)</option>
+    </select>
+  </div>
+  <div class="col-md-2"><button class="btn btn-primary w-100">Add</button></div>
+</form>
+
+{% if sites %}
+<table class="table table-striped">
+  <thead><tr><th>Site #</th><th>Station Name</th><th>Parameter</th><th>Status</th><th>Actions</th></tr></thead>
+  <tbody>
+  {% for s in sites %}
+  <tr>
+    <td><code>{{ s.site_number }}</code></td>
+    <td>{{ s.station_name or "—" }}</td>
+    <td>{{ "Discharge" if s.parameter_code == "00060" else "Gage height" }}</td>
+    <td>
+      <form method="post" action="/sites/{{ s.id }}/toggle" style="display:inline">
+        <button class="btn btn-sm {{ 'btn-success' if s.active else 'btn-outline-secondary' }}">
+          {{ "Active" if s.active else "Inactive" }}
+        </button>
+      </form>
+    </td>
+    <td>
+      <form method="post" action="/sites/{{ s.id }}/remove" style="display:inline">
+        <button class="btn btn-sm btn-outline-danger">Remove</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No sites configured yet.</p>
+{% endif %}
+{% endblock %}
