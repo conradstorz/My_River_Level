@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Broadcast{% endblock %}
+{% block content %}
+<h1 class="mb-4">Send Broadcast</h1>
+<form method="post" action="/broadcast">
+  <div class="mb-3">
+    <label class="form-label">Message</label>
+    <textarea name="message" class="form-control" rows="4" required></textarea>
+  </div>
+  <div class="mb-3">
+    <label class="form-label">Send to channels</label><br>
+    {% for ch in ["telegram", "sms", "whatsapp", "facebook"] %}
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="checkbox" name="channels" value="{{ ch }}" id="ch_{{ ch }}" checked>
+      <label class="form-check-label" for="ch_{{ ch }}">{{ ch|capitalize }}</label>
+    </div>
+    {% endfor %}
+  </div>
+  <button type="submit" class="btn btn-warning">Send Broadcast</button>
+</form>
+{% endblock %}

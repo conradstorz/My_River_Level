@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1 class="mb-4">Settings</h1>
+<form method="post" action="/settings">
+  {% for key, label, input_type in fields %}
+  <div class="mb-3 row">
+    <label class="col-sm-4 col-form-label">{{ label }}</label>
+    <div class="col-sm-6">
+      <input type="{{ input_type }}" name="{{ key }}"
+             value="{{ current[key] }}"
+             class="form-control"
+             {% if input_type == "password" %}autocomplete="new-password"{% endif %}>
+    </div>
+  </div>
+  {% endfor %}
+  <button type="submit" class="btn btn-primary">Save Settings</button>
+</form>
+{% endblock %}

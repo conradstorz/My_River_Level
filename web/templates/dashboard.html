@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="60">{% endblock %}
+{% block content %}
+<h1 class="mb-4">Dashboard</h1>
+
+<h4>Monitored Sites</h4>
+{% if sites %}
+<table class="table table-striped">
+  <thead><tr>
+    <th>Station</th><th>Site #</th><th>Level</th><th>Percentile</th>
+    <th>Condition</th><th>Last Updated</th>
+  </tr></thead>
+  <tbody>
+  {% for s in sites %}
+  {% set badge = "success" if s.severity == "NORMAL"
+                 else "warning" if s.severity in ("LOW","HIGH")
+                 else "danger" if s.severity in ("SEVERE LOW","SEVERE HIGH")
+                 else "secondary" %}
+  <tr>
+    <td>{{ s.station_name }}</td>
+    <td>{{ s.site_number }}</td>
+    <td>{{ "%.2f"|format(s.current_value) if s.current_value else "—" }} {{ s.unit or "" }}</td>
+    <td>{{ "%.1f"|format(s.percentile) if s.percentile else "—" }}%</td>
+    <td><span class="badge bg-{{ badge }}">{{ s.severity or "No data" }}</span></td>
+    <td>{{ s.checked_at or "—" }}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No sites configured. <a href="/sites">Add a site</a>.</p>
+{% endif %}
+
+<h4 class="mt-4">Recent Notifications</h4>
+{% if recent_notifications %}
+<table class="table table-sm">
+  <thead><tr><th>Time</th><th>Station</th><th>Channel</th><th>Type</th><th>Message</th><th>OK</th></tr></thead>
+  <tbody>
+  {% for n in recent_notifications %}
+  <tr>
+    <td>{{ n.sent_at }}</td>
+    <td>{{ n.station_name or "—" }}</td>
+    <td>{{ n.channel }}</td>
+    <td>{{ n.trigger_type }}</td>
+    <td>{{ n.message_text[:80] }}{% if n.message_text|length > 80 %}…{% endif %}</td>
+    <td>{% if n.success %}✓{% else %}<span class="text-danger">✗</span>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No notifications sent yet.</p>
+{% endif %}
+{% endblock %}

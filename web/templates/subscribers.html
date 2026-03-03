@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Subscribers{% endblock %}
+{% block content %}
+<h1 class="mb-4">Subscribers</h1>
+
+<h4>Add Subscriber Manually</h4>
+<form method="post" action="/subscribers/add" class="row g-2 mb-4">
+  <div class="col-md-3"><input name="display_name" class="form-control" placeholder="Name"></div>
+  <div class="col-md-2">
+    <select name="channel" class="form-select">
+      <option value="telegram">Telegram</option>
+      <option value="sms">SMS</option>
+      <option value="whatsapp">WhatsApp</option>
+      <option value="facebook">Facebook</option>
+    </select>
+  </div>
+  <div class="col-md-4"><input name="channel_id" class="form-control" placeholder="Chat ID / Phone / PSID"></div>
+  <div class="col-md-2"><button class="btn btn-primary w-100">Add</button></div>
+</form>
+
+<h4>Active Subscribers</h4>
+{% if subscribers %}
+<table class="table table-striped">
+  <thead><tr><th>Name</th><th>Channel</th><th>ID</th><th>Opted In</th><th></th></tr></thead>
+  <tbody>
+  {% for s in subscribers if s.active %}
+  <tr>
+    <td>{{ s.display_name or "—" }}</td>
+    <td><span class="badge bg-secondary">{{ s.channel }}</span></td>
+    <td><code>{{ s.channel_id }}</code></td>
+    <td>{{ s.opted_in_at }}</td>
+    <td>
+      <form method="post" action="/subscribers/{{ s.id }}/remove" style="display:inline">
+        <button class="btn btn-sm btn-outline-danger">Remove</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No subscribers yet. They can opt in by messaging a bot.</p>
+{% endif %}
+{% endblock %}
