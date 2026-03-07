@@ -28,6 +28,10 @@ python setup_wizard.py --list            # list existing configs
 
 There is no test suite in this project.
 
+## Shell commands
+
+Never chain or pipe bash commands. Run one command at a time. Do not use `&&`, `||`, `|`, or `;` to combine commands in a single Bash call.
+
 ## Service Commands (run as Administrator)
 
 ```bash
@@ -41,7 +45,7 @@ python service.py remove
 python service.py debug
 ```
 
-The service runs on `http://localhost:8080`. Logs go to `logs/river_monitor.log`.
+The service runs on `http://localhost:5743`. Logs go to `logs/river_monitor.log`.
 On first start, if `config.py` exists its sites and settings are automatically migrated to the SQLite database at `db/river_monitor.db`.
 
 ## Architecture

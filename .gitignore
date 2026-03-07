@@ -38,3 +38,10 @@ Thumbs.db
 
 # Git worktrees
 .worktrees/
+
+# Claude Code settings
+.claude/
+
+# Runtime files containing PII (subscriber data, logs)
+db/river_monitor.db
+logs/
