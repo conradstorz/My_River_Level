@@ -113,12 +113,22 @@ def test_get_pages_for_noaa_gauge(tmp_db):
     link_page_gauge(p2["id"], gid, tmp_db)
     pages = get_pages_for_noaa_gauge(gid, tmp_db)
     assert len(pages) == 2
+    # Disable one page and verify it's excluded
+    from db.models import get_db
+    conn = get_db(tmp_db)
+    conn.execute("UPDATE user_pages SET active=0 WHERE id=?", (p1["id"],))
+    conn.commit()
+    conn.close()
+    active_pages = get_pages_for_noaa_gauge(gid, tmp_db)
+    assert len(active_pages) == 1
+    assert active_pages[0]["id"] == p2["id"]
 
 
 def test_get_page_subscribers_for_gauge(tmp_db):
     from db.models import (create_user_page, get_page_by_public_token,
                            get_or_create_noaa_gauge, link_page_gauge,
-                           add_page_subscriber, get_page_subscribers_for_gauge)
+                           add_page_subscriber, get_page_subscribers_for_gauge,
+                           set_page_subscriber_status)
     init_db(tmp_db)
     pub, _ = create_user_page("Test", tmp_db)
     page = get_page_by_public_token(pub, tmp_db)
@@ -130,3 +140,8 @@ def test_get_page_subscribers_for_gauge(tmp_db):
     assert len(subs) == 2
     channels = {s["channel"] for s in subs}
     assert channels == {"sms", "telegram"}
+    # Pause one subscriber and verify they are excluded
+    set_page_subscriber_status(page["id"], "sms", "+15025551234", "paused", tmp_db)
+    active_subs = get_page_subscribers_for_gauge(gid, tmp_db)
+    assert len(active_subs) == 1
+    assert active_subs[0]["channel"] == "telegram"
