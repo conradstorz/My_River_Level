@@ -1,5 +1,6 @@
 import logging
 from db.models import get_setting
+from monitor.phone_utils import normalize_e164
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,11 @@ class SMSAdapter:
             logger.warning("Twilio credentials not configured")
             return False
         try:
-            client.messages.create(body=message, from_=from_number, to=to_number)
+            client.messages.create(
+                body=message,
+                from_=from_number,
+                to=normalize_e164(to_number),
+            )
             return True
         except Exception as e:
             logger.error("SMS send failed to %s: %s", to_number, e)

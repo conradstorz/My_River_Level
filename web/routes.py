@@ -1,5 +1,11 @@
+import logging
+
 from flask import render_template, current_app, request, redirect, url_for, flash
 from db.models import get_db, get_setting, set_setting
+from monitor.site_validation import validate_usgs_site
+from monitor.phone_utils import normalize_e164
+
+logger = logging.getLogger(__name__)
 
 SETTINGS_FIELDS = [
     ("poll_interval_minutes", "Poll Interval (minutes)", "number"),
@@ -62,6 +68,8 @@ def register_routes(app):
         channel = request.form.get("channel", "").strip()
         channel_id = request.form.get("channel_id", "").strip()
         if channel and channel_id:
+            if channel in ("sms", "whatsapp"):
+                channel_id = normalize_e164(channel_id)
             conn = get_db(db_path)
             conn.execute(
                 "INSERT OR REPLACE INTO subscribers (display_name, channel, channel_id, active) VALUES (?,?,?,1)",
@@ -109,6 +117,36 @@ def register_routes(app):
         conn.close()
         return '<?xml version="1.0" encoding="UTF-8"?><Response></Response>', 200, {"Content-Type": "text/xml"}
 
+    @app.route("/webhook/twilio/status", methods=["POST"])
+    def webhook_twilio_status():
+        """
+        Twilio delivery status callback.
+
+        Configure this URL in the Twilio console as the "Status Callback URL"
+        on your messaging service or phone number. Twilio will POST here when
+        a message transitions to delivered, undelivered, or failed.
+
+        Error 30034 = US A2P 10DLC campaign not registered — requires
+        registering the sending number with an A2P campaign in Twilio console.
+        """
+        msg_sid = request.form.get("MessageSid", "")
+        msg_status = request.form.get("MessageStatus", "")
+        error_code = request.form.get("ErrorCode", "")
+        to_number = request.form.get("To", "")
+
+        if msg_status in ("undelivered", "failed"):
+            logger.warning(
+                "Twilio delivery failure: SID=%s status=%s error=%s to=%s",
+                msg_sid, msg_status, error_code, to_number,
+            )
+            if error_code == "30034":
+                logger.error(
+                    "Twilio error 30034: sending number is not registered with a "
+                    "US A2P 10DLC campaign. Register at console.twilio.com → "
+                    "Messaging → A2P 10DLC."
+                )
+        return "", 204
+
     @app.route("/webhook/facebook", methods=["GET", "POST"])
     def webhook_facebook():
         db_path = current_app.config["DB_PATH"]
@@ -147,19 +185,24 @@ def register_routes(app):
     def add_site():
         db_path = current_app.config["DB_PATH"]
         site_number = request.form.get("site_number", "").strip()
-        station_name = request.form.get("station_name", "").strip()
         param_code = request.form.get("parameter_code", "00060").strip()
-        if site_number:
-            conn = get_db(db_path)
-            conn.execute(
-                "INSERT OR IGNORE INTO sites (site_number, station_name, parameter_code) VALUES (?,?,?)",
-                (site_number, station_name, param_code)
-            )
-            conn.commit()
-            conn.close()
-            flash(f"Site {site_number} added.", "success")
-        else:
+        if not site_number:
             flash("Site number is required.", "danger")
+            return redirect(url_for("sites"))
+
+        is_valid, usgs_name, error = validate_usgs_site(site_number, param_code)
+        if not is_valid:
+            flash(f"Invalid site number: {error}", "danger")
+            return redirect(url_for("sites"))
+
+        conn = get_db(db_path)
+        conn.execute(
+            "INSERT OR IGNORE INTO sites (site_number, station_name, parameter_code) VALUES (?,?,?)",
+            (site_number, usgs_name, param_code)
+        )
+        conn.commit()
+        conn.close()
+        flash(f"Site {site_number} ({usgs_name}) added.", "success")
         return redirect(url_for("sites"))
 
     @app.route("/sites/<int:site_id>/toggle", methods=["POST"])

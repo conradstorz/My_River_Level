@@ -1,5 +1,6 @@
 import logging
 from db.models import get_setting
+from monitor.phone_utils import normalize_e164
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class WhatsAppAdapter:
             client.messages.create(
                 body=message,
                 from_=from_number,
-                to=f"whatsapp:{to_number}"
+                to=f"whatsapp:{normalize_e164(to_number)}",
             )
             return True
         except Exception as e:
