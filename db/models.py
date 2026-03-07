@@ -80,6 +80,45 @@ CREATE TABLE IF NOT EXISTS pending_registrations (
     started_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(channel, channel_id)
 );
+
+CREATE TABLE IF NOT EXISTS user_pages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    public_token TEXT NOT NULL UNIQUE,
+    edit_token TEXT NOT NULL UNIQUE,
+    page_name TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS noaa_gauges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lid TEXT NOT NULL UNIQUE,
+    station_name TEXT NOT NULL DEFAULT '',
+    current_stage REAL,
+    action_stage REAL,
+    minor_flood_stage REAL,
+    moderate_flood_stage REAL,
+    major_flood_stage REAL,
+    severity TEXT NOT NULL DEFAULT 'Unknown',
+    last_polled_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS page_noaa_gauges (
+    page_id INTEGER NOT NULL REFERENCES user_pages(id),
+    noaa_gauge_id INTEGER NOT NULL REFERENCES noaa_gauges(id),
+    PRIMARY KEY (page_id, noaa_gauge_id)
+);
+
+CREATE TABLE IF NOT EXISTS page_subscribers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    page_id INTEGER NOT NULL REFERENCES user_pages(id),
+    channel TEXT NOT NULL,
+    channel_id TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    opted_in_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(page_id, channel, channel_id)
+);
 """
 
 

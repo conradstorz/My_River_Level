@@ -31,3 +31,16 @@ def test_init_db_seeds_default_settings(tmp_db):
     assert get_setting("reminder_low_high_hours", tmp_db) == "24"
     assert get_setting("reminder_severe_hours", tmp_db) == "4"
     assert get_setting("historical_start_year", tmp_db) == "1980"
+
+def test_new_tables_created(tmp_db):
+    from db.models import init_db, get_db
+    init_db(tmp_db)
+    conn = get_db(tmp_db)
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    conn.close()
+    assert "user_pages" in tables
+    assert "noaa_gauges" in tables
+    assert "page_noaa_gauges" in tables
+    assert "page_subscribers" in tables
