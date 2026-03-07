@@ -100,7 +100,7 @@ CREATE TABLE IF NOT EXISTS noaa_gauges (
     minor_flood_stage REAL,
     moderate_flood_stage REAL,
     major_flood_stage REAL,
-    severity TEXT NOT NULL DEFAULT 'Unknown' CHECK(severity IN ('Unknown', 'Normal', 'Action', 'Minor', 'Moderate', 'Major')),
+    severity TEXT NOT NULL DEFAULT 'Normal' CHECK(severity IN ('Unknown', 'Normal', 'Action', 'Minor', 'Moderate', 'Major')),
     last_polled_at TEXT
 );
 
