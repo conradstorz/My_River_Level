@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Create a Page{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-6">
+    <h1 class="mb-4">Create Your River Page</h1>
+    <p class="text-muted">Choose a name for your page. You'll get a shareable link and a private edit link.</p>
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label">Page Name</label>
+        <input type="text" name="page_name" class="form-control" placeholder="e.g. My Ohio River Gauges" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Create Page</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

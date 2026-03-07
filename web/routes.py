@@ -236,6 +236,22 @@ def register_routes(app):
         current = {key: get_setting(key, db_path, default="") for key, _, _ in SETTINGS_FIELDS}
         return render_template("settings.html", fields=SETTINGS_FIELDS, current=current)
 
+    @app.route("/pages/new", methods=["GET", "POST"])
+    def page_new():
+        if request.method == "POST":
+            page_name = request.form.get("page_name", "").strip()
+            if not page_name:
+                flash("Page name is required.", "danger")
+                return render_template("page_new.html")
+            from db.models import create_user_page
+            db_path = current_app.config["DB_PATH"]
+            public_token, edit_token = create_user_page(page_name, db_path)
+            return render_template("page_created.html",
+                                   page_name=page_name,
+                                   public_token=public_token,
+                                   edit_token=edit_token)
+        return render_template("page_new.html")
+
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():
         db_path = current_app.config["DB_PATH"]

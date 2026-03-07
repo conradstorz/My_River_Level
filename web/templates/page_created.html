@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Page Created{% endblock %}
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-md-8">
+    <h1 class="mb-4">{{ page_name }} — Created!</h1>
+
+    <div class="alert alert-success">
+      <strong>Save your edit link now.</strong> It won't be shown again.
+    </div>
+
+    <h5>Share this link (public view)</h5>
+    <div class="input-group mb-4">
+      <input type="text" class="form-control"
+             value="{{ request.host_url }}view/{{ public_token }}" readonly id="pub-url">
+      <button class="btn btn-outline-secondary"
+              onclick="navigator.clipboard.writeText(document.getElementById('pub-url').value)">Copy</button>
+    </div>
+
+    <h5>Keep this link private (edit / manage)</h5>
+    <div class="input-group mb-4">
+      <input type="text" class="form-control"
+             value="{{ request.host_url }}edit/{{ edit_token }}" readonly id="edit-url">
+      <button class="btn btn-outline-secondary"
+              onclick="navigator.clipboard.writeText(document.getElementById('edit-url').value)">Copy</button>
+    </div>
+
+    <a href="/edit/{{ edit_token }}" class="btn btn-primary">
+      Go to Edit Page &rarr;
+    </a>
+  </div>
+</div>
+{% endblock %}
