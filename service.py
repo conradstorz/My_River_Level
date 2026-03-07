@@ -117,11 +117,13 @@ def run_service(db_path=None, stop_event=None):
     plain_adapters = all_adapters
 
     from monitor.polling import PollingThread
+    from monitor.noaa_polling import NoaaPollingThread
     from monitor.scheduler import SchedulerThread
     from monitor.dispatcher import NotificationDispatcher
     from web.app import create_app
 
     polling = PollingThread(notif_queue, db_path=db_path, stop_event=stop_event)
+    noaa_polling = NoaaPollingThread(notif_queue, db_path=db_path, stop_event=stop_event)
     scheduler = SchedulerThread(notif_queue, db_path=db_path, stop_event=stop_event)
     dispatcher = NotificationDispatcher(
         notif_queue, adapters=plain_adapters, db_path=db_path, stop_event=stop_event
@@ -140,7 +142,7 @@ def run_service(db_path=None, stop_event=None):
     # Start all threads
     for t in thread_adapters:
         t.start()
-    for t in [polling, scheduler, dispatcher, web_thread]:
+    for t in [polling, noaa_polling, scheduler, dispatcher, web_thread]:
         t.start()
 
     logger.info("All threads started. Portal at http://localhost:5743")
