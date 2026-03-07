@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import uuid
 
 # Default database path — overridden by service.py
 DEFAULT_DB = os.path.join(os.path.dirname(__file__), "river_monitor.db")
@@ -161,3 +162,157 @@ def set_setting(key, value, db_path=None):
     )
     conn.commit()
     conn.close()
+
+
+def create_user_page(page_name, db_path=None):
+    """Create a new user page. Returns (public_token, edit_token)."""
+    public_token = str(uuid.uuid4())
+    edit_token = str(uuid.uuid4())
+    conn = get_db(db_path)
+    conn.execute(
+        "INSERT INTO user_pages (public_token, edit_token, page_name) VALUES (?, ?, ?)",
+        (public_token, edit_token, page_name)
+    )
+    conn.commit()
+    conn.close()
+    return public_token, edit_token
+
+
+def get_page_by_public_token(token, db_path=None):
+    conn = get_db(db_path)
+    row = conn.execute("SELECT * FROM user_pages WHERE public_token=?", (token,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_page_by_edit_token(token, db_path=None):
+    conn = get_db(db_path)
+    row = conn.execute("SELECT * FROM user_pages WHERE edit_token=?", (token,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
+                              moderate_stage, major_stage, db_path=None):
+    """Insert gauge if not present; return its id."""
+    conn = get_db(db_path)
+    conn.execute(
+        """INSERT OR IGNORE INTO noaa_gauges
+           (lid, station_name, action_stage, minor_flood_stage, moderate_flood_stage, major_flood_stage)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (lid, station_name, action_stage, minor_stage, moderate_stage, major_stage)
+    )
+    conn.commit()
+    row = conn.execute("SELECT id FROM noaa_gauges WHERE lid=?", (lid,)).fetchone()
+    conn.close()
+    return row["id"]
+
+
+def update_noaa_gauge_condition(lid, current_stage, severity, db_path=None):
+    conn = get_db(db_path)
+    conn.execute(
+        """UPDATE noaa_gauges SET current_stage=?, severity=?, last_polled_at=datetime('now')
+           WHERE lid=?""",
+        (current_stage, severity, lid)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_all_noaa_gauges(db_path=None):
+    conn = get_db(db_path)
+    rows = conn.execute("SELECT * FROM noaa_gauges").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def link_page_gauge(page_id, gauge_id, db_path=None):
+    conn = get_db(db_path)
+    conn.execute(
+        "INSERT OR IGNORE INTO page_noaa_gauges (page_id, noaa_gauge_id) VALUES (?, ?)",
+        (page_id, gauge_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def unlink_page_gauge(page_id, gauge_id, db_path=None):
+    conn = get_db(db_path)
+    conn.execute(
+        "DELETE FROM page_noaa_gauges WHERE page_id=? AND noaa_gauge_id=?",
+        (page_id, gauge_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_page_gauges(page_id, db_path=None):
+    """Return all noaa_gauges linked to a page."""
+    conn = get_db(db_path)
+    rows = conn.execute(
+        """SELECT ng.* FROM noaa_gauges ng
+           JOIN page_noaa_gauges png ON png.noaa_gauge_id = ng.id
+           WHERE png.page_id=?""",
+        (page_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_pages_for_noaa_gauge(gauge_id, db_path=None):
+    """Return all active pages that include this gauge."""
+    conn = get_db(db_path)
+    rows = conn.execute(
+        """SELECT up.* FROM user_pages up
+           JOIN page_noaa_gauges png ON png.page_id = up.id
+           WHERE png.noaa_gauge_id=? AND up.active=1""",
+        (gauge_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def add_page_subscriber(page_id, channel, channel_id, display_name, db_path=None):
+    conn = get_db(db_path)
+    conn.execute(
+        """INSERT OR REPLACE INTO page_subscribers
+           (page_id, channel, channel_id, display_name, status)
+           VALUES (?, ?, ?, ?, 'active')""",
+        (page_id, channel, channel_id, display_name)
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_page_subscriber_status(page_id, channel, channel_id, status, db_path=None):
+    conn = get_db(db_path)
+    conn.execute(
+        """UPDATE page_subscribers SET status=?
+           WHERE page_id=? AND channel=? AND channel_id=?""",
+        (status, page_id, channel, channel_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_active_page_subscribers(page_id, db_path=None):
+    conn = get_db(db_path)
+    rows = conn.execute(
+        "SELECT * FROM page_subscribers WHERE page_id=? AND status='active'",
+        (page_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_page_subscribers_for_gauge(gauge_id, db_path=None):
+    """Return all active page_subscribers for every page linked to this gauge."""
+    conn = get_db(db_path)
+    rows = conn.execute(
+        """SELECT ps.* FROM page_subscribers ps
+           JOIN page_noaa_gauges png ON png.page_id = ps.page_id
+           WHERE png.noaa_gauge_id=? AND ps.status='active'""",
+        (gauge_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
