@@ -1,279 +1,226 @@
 # River Level Extreme Conditions Monitor
 
-A Python system that monitors USGS stream gauges to detect and report extreme water conditions (floods and droughts) for waterways.
+A Python system that monitors USGS stream gauges, detects extreme water conditions (floods and droughts), and delivers alerts to subscribers via multiple notification channels. It runs as a Windows service with a web management portal.
 
 ## Features
 
-- 🔍 Find USGS monitoring gauges near any location
-- 📊 Fetch real-time and historical water data
-- 📈 Calculate statistical percentiles to identify extreme conditions
-- ⚠️ Alert on flood and drought conditions
-- 📋 Generate detailed condition reports
+- Monitors USGS stream gauges in real time
+- Calculates statistical percentiles against historical baselines to classify conditions
+- Sends alerts via Telegram, SMS, WhatsApp, and Facebook Messenger
+- Web portal for managing sites, subscribers, settings, and manual broadcasts
+- Runs as a Windows background service
+- Auto-migrates legacy `config.py` files to the SQLite database on first start
 
-## Based on USGS Data Tools
+## Architecture Overview
 
-This project uses the modernized USGS Water Data for the Nation services:
-- **dataretrieval**: Access USGS water data
-- **hyswap**: Statistical analysis for surface water
-- Data from: https://waterdata.usgs.gov/
+```
+service.py          — Windows service entry point; orchestrates all threads
+├── monitor/
+│   ├── polling.py      — Fetches USGS data on a configurable interval
+│   ├── scheduler.py    — Decides when to trigger notifications (thresholds, reminders)
+│   ├── dispatcher.py   — Routes notifications from the queue to adapters
+│   └── adapters/
+│       ├── telegram.py
+│       ├── sms.py       (Twilio)
+│       ├── whatsapp.py  (Twilio)
+│       └── facebook.py
+├── web/
+│   ├── app.py          — Flask app factory
+│   └── routes.py       — Dashboard, Sites, Subscribers, Settings, Broadcast
+├── db/
+│   ├── models.py       — SQLite schema, init, and helper functions
+│   └── migration.py    — Imports config.py into the database on first run
+├── river_monitor.py    — Standalone CLI monitor (original script)
+└── setup_wizard.py     — Interactive CLI for finding and selecting USGS gauges
+```
 
-Reference: https://waterdata.usgs.gov/blog/wdfn-stats-delivery/
+All threads share a single `notification_queue`. The web portal can also inject broadcast messages directly into the queue.
 
 ## Installation
 
 ### Prerequisites
-- Python 3.8 or higher
-- Git (for cloning the repository)
 
-### Quick Setup (Recommended)
+- Python 3.8+
+- Windows (for the service; `python service.py debug` works on any OS)
+- Administrator privileges (for service install/start/stop)
 
-Clone and run the automated setup script:
+### Setup
 
-**Windows:**
 ```bash
 git clone git@github.com:conradstorz/My_River_Level.git
 cd My_River_Level
+
+# Windows quick setup
 setup.bat
-```
 
-**Linux/Mac:**
-```bash
-git clone git@github.com:conradstorz/My_River_Level.git
-cd My_River_Level
-chmod +x setup.sh
-./setup.sh
-```
-
-The setup script will automatically create a virtual environment and install all dependencies.
-
-**That's it!** Now just run:
-```bash
-python river_monitor.py
-```
-
-The monitor will detect it's the first run and automatically offer to launch the setup wizard to help you configure your monitoring location.
-
-### Manual Setup (Advanced)
-
-If you prefer manual control:
-
-**Option 1: Using venv (built-in)**
-```bash
-# Create virtual environment
+# Or manually
 python -m venv venv
-
-# Activate virtual environment
-# Windows:
 venv\Scripts\activate
-# Linux/Mac:
-source venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-**Option 2: Using uv (faster)**
+## Running
+
+### As a Windows Service (recommended for production)
+
+Run these commands as Administrator:
+
 ```bash
-# Install uv first: pip install uv
-
-# Create virtual environment
-uv venv
-
-# Activate virtual environment
-# Windows:
-.venv\Scripts\activate
-# Linux/Mac:
-source .venv/bin/activate
-
-# Install dependencies
-uv pip install -r requirements.txt
+python service.py install
+python service.py start
 ```
 
-### Verifying Installation
+The service starts automatically on boot and runs at `http://localhost:5743`.
+
 ```bash
-python -c "import dataretrieval; print('✓ Dependencies installed successfully')"
+python service.py stop
+python service.py remove
 ```
 
-### Deactivating Virtual Environment
-When you're done:
+### In Debug Mode (development / any OS)
+
 ```bash
-deactivate
+python service.py debug
 ```
+
+Runs all threads in the foreground. Press Ctrl+C to stop.
+
+### Desktop Shortcut (Windows)
+
+Create a one-click launcher on your Desktop:
+
+```bash
+python create_shortcut.py
+```
+
+Double-clicking **River Monitor** on the Desktop will:
+- Open the portal immediately if the service is already running
+- Start the service and then open the portal if it is stopped
+- Launch in debug mode (new console window) if the service is not installed
+
+You can also run the launcher directly at any time:
+
+```bash
+pythonw launch.py   # silent (no console)
+python launch.py    # with console output
+```
+
+### Logs
+
+Logs rotate at 5 MB (3 backups) and are written to `logs/river_monitor.log`.
+
+## Web Portal
+
+Open `http://localhost:5743` after starting the service.
+
+| Page | URL | Purpose |
+|------|-----|---------|
+| Dashboard | `/` | Live site conditions and recent notification history |
+| Sites | `/sites` | Add, toggle active/inactive, or remove monitored gauges |
+| Subscribers | `/subscribers` | Manage alert recipients by channel |
+| Settings | `/settings` | Polling interval, percentile thresholds, and channel credentials |
+| Broadcast | `/broadcast` | Send a manual message to all (or selected) channels |
 
 ## Configuration
 
-The setup wizard (recommended) will:
-- Help you find your location (by address or coordinates)
-- Search for nearby USGS stream gauges
-- Let you select which gauges to monitor
-- Automatically save configuration
+All settings are stored in the SQLite database at `db/river_monitor.db` and editable via the Settings page. Defaults:
 
-### Manual Configuration (Alternative)
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `poll_interval_minutes` | 15 | How often to fetch USGS data |
+| `low_percentile` | 10 | Below-normal threshold |
+| `high_percentile` | 90 | Above-normal threshold |
+| `very_low_percentile` | 5 | Severe drought threshold |
+| `very_high_percentile` | 95 | Severe flood threshold |
+| `reminder_low_high_hours` | 24 | Re-alert interval for LOW/HIGH conditions |
+| `reminder_severe_hours` | 4 | Re-alert interval for SEVERE conditions |
+| `historical_start_year` | 1980 | Oldest year used for baseline statistics |
+| `search_radius_miles` | 25 | Radius for automatic gauge discovery |
 
-If you prefer to manually edit configuration:
+### Legacy config migration
 
-### Option 1: Monitor specific gauges
-```python
-MONITORING_SITES = [
-    "01646500",  # Potomac River near Washington, DC
-    "01638500",  # Potomac River at Point of Rocks, MD
-]
-```
+If a `config.py` file exists from a previous installation, it is automatically imported into the database on first start. The file is not deleted.
 
-### Option 2: Find gauges near a location
-```python
-LOCATION = {
-    "latitude": 38.9072,   # Washington, DC
-    "longitude": -77.0369,
-}
-SEARCH_RADIUS_MILES = 25
-```
+## Notification Channels
 
-Find gauge numbers at: https://waterdata.usgs.gov/
+Configure credentials on the Settings page or directly in the database.
 
-### Adjust alert thresholds
-```python
-LOW_FLOW_PERCENTILE = 10   # Bottom 10% = drought
-HIGH_FLOW_PERCENTILE = 90  # Top 90% = flood risk
-VERY_LOW_PERCENTILE = 5    # Severe drought
-VERY_HIGH_PERCENTILE = 95  # Severe flood
-```
+### Telegram
 
-## Usage
+1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token.
+2. Paste it into **Telegram Bot Token** on the Settings page.
+3. Users subscribe by sending `/start` to your bot (or add them manually via the Subscribers page).
 
-### First Run
+### SMS / WhatsApp (Twilio)
 
-On first run, the monitor will automatically prompt you to run the setup wizard:
+1. Create a [Twilio](https://www.twilio.com/) account and provision a number.
+2. Enter **Account SID**, **Auth Token**, and phone numbers on the Settings page.
+3. Point your Twilio SMS/WhatsApp webhook to `http://<your-host>:5743/webhook/twilio`.
+4. Users subscribe by texting `JOIN` and unsubscribe with `STOP`.
 
-```bash
-python river_monitor.py
-```
+### Facebook Messenger
 
-If you haven't configured any gauges, you'll see:
-```
-⚠️  FIRST RUN DETECTED
-Would you like to run the setup wizard? (y/n)
-```
+1. Create a Facebook App with Messenger enabled and generate a Page Access Token.
+2. Enter **Page Token** and a **Verify Token** of your choice on the Settings page.
+3. Set your webhook URL to `http://<your-host>:5743/webhook/facebook`.
+4. Users subscribe by messaging `JOIN` to your page.
 
-### Multiple Configurations
+## USGS Gauge Setup
 
-You can create and maintain multiple configurations for different locations:
-
-**Create a new configuration:**
-```bash
-python setup_wizard.py --config ohio_river
-python setup_wizard.py --config mississippi
-```
-
-**List all configurations:**
-```bash
-python river_monitor.py --list-configs
-# or
-python setup_wizard.py --list
-```
-
-**Run with a specific configuration:**
-```bash
-python river_monitor.py --config ohio_river
-python river_monitor.py --config mississippi
-```
-
-This is useful for:
-- Monitoring multiple waterways
-- Different alert thresholds for different locations
-- Separate configurations for work vs personal monitoring
-- Testing different gauge selections
-
-### Running the Setup Wizard Manually
-
-You can re-run the setup wizard anytime:
+### Using the setup wizard (recommended)
 
 ```bash
 python setup_wizard.py
 ```
 
-The wizard provides an interactive experience:
-1. **Location Entry**: Enter an address or coordinates
-2. **Gauge Search**: Finds active USGS gauges nearby
-3. **Gauge Selection**: Preview and select gauges to monitor
-4. **Auto-Configuration**: Saves settings to config.py
+The wizard geocodes an address, finds nearby active gauges, lets you preview recent data, and adds your selections to the database.
 
-### Running the Monitor
+### Manual addition
 
-After configuration, simply run:
+On the **Sites** page, enter an 8-digit USGS site number (e.g. `03293000`) and optional station name. Find gauge numbers at [waterdata.usgs.gov](https://waterdata.usgs.gov/).
+
+### Parameter codes
+
+- `00060` — Discharge (streamflow) in cubic feet per second (cfs)
+- `00065` — Gage height in feet
+
+## Condition Classifications
+
+| Severity | Percentile | Description |
+|----------|-----------|-------------|
+| SEVERE HIGH | ≥ 95th | Severe flood conditions |
+| HIGH | ≥ 90th | Above-normal flow, flood risk |
+| NORMAL | 10th–90th | Normal conditions |
+| LOW | ≤ 10th | Below-normal flow, drought |
+| SEVERE LOW | ≤ 5th | Severe drought conditions |
+
+## Standalone CLI Monitor
+
+The original CLI script still works independently:
+
 ```bash
+# Run with default config
 python river_monitor.py
+
+# Run with a named config file
+python river_monitor.py --config Bushmans
+
+# List available configs
+python river_monitor.py --list-configs
 ```
 
-### Sample Output
-```
-================================================================================
-RIVER LEVEL EXTREME CONDITIONS REPORT
-Generated: 2026-02-14 10:30:00
-================================================================================
+## Testing
 
-⚠️ ALERT Site: 01646500
-  Current Value: 2458.00 cfs
-  As of: 2026-02-14 10:15:00
-  Condition: SEVERE LOW (Severe drought conditions)
-  Percentile: 3.2%
-  Historical Range: 1200.00 - 425000.00 cfs
-  Historical Median: 8950.00 cfs
-
-✓ Site: 01638500
-  Current Value: 8523.00 cfs
-  As of: 2026-02-14 10:15:00
-  Condition: NORMAL (Normal flow conditions)
-  Percentile: 48.5%
-  Historical Range: 850.00 - 335000.00 cfs
-  Historical Median: 8200.00 cfs
-
-================================================================================
-Summary: 1 of 2 sites show extreme conditions
-================================================================================
+```bash
+pytest
 ```
 
-## Understanding the Data
-
-### Parameter Codes
-- **00060**: Discharge (streamflow) in cubic feet per second (cfs)
-- **00065**: Gage height in feet
-
-### Condition Classifications
-- **SEVERE HIGH** (≥95th percentile): Severe flood conditions
-- **HIGH** (≥90th percentile): Above normal flow, flood risk
-- **NORMAL** (10th-90th percentile): Normal conditions
-- **LOW** (≤10th percentile): Below normal flow, drought
-- **SEVERE LOW** (≤5th percentile): Severe drought conditions
-
-## Project Structure
-
-```
-My_River_level/
-├── river_monitor.py     # Main monitoring script
-├── setup_wizard.py      # Interactive setup tool
-├── config.py            # Configuration settings
-├── requirements.txt     # Python dependencies
-└── README.md           # This file
-```
-
-## Next Steps
-
-- Add email/SMS alerts for extreme conditions
-- Create visualizations with matplotlib
-- Build a web dashboard
-- Schedule automated monitoring
-- Export reports to CSV/JSON
-- Add support for multiple parameter types (stage, temperature, etc.)
+Tests cover database models and migration, web routes, and monitor components (polling, scheduling, dispatching).
 
 ## Resources
 
 - [USGS Water Data for the Nation](https://waterdata.usgs.gov/)
 - [dataretrieval Documentation](https://github.com/DOI-USGS/dataRetrieval)
-- [hyswap Documentation](https://doi-usgs.github.io/hyswap/)
 - [Find Monitoring Locations](https://waterdata.usgs.gov/nwis/rt)
 - [National Water Dashboard](https://dashboard.waterdata.usgs.gov/)
-
-## Support
-
-For USGS data questions: gs-w_waterdata_support@usgs.gov
+- USGS data support: gs-w_waterdata_support@usgs.gov
