@@ -133,7 +133,7 @@ def run_service(db_path=None, stop_event=None):
     def run_flask():
         import logging as _log
         _log.getLogger("werkzeug").setLevel(_log.WARNING)
-        flask_app.run(host="127.0.0.1", port=8080, use_reloader=False, threaded=True)
+        flask_app.run(host="127.0.0.1", port=5743, use_reloader=False, threaded=True)
 
     web_thread = threading.Thread(target=run_flask, name="WebThread", daemon=True)
 
@@ -143,7 +143,7 @@ def run_service(db_path=None, stop_event=None):
     for t in [polling, scheduler, dispatcher, web_thread]:
         t.start()
 
-    logger.info("All threads started. Portal at http://localhost:8080")
+    logger.info("All threads started. Portal at http://localhost:5743")
     stop_event.wait()
     logger.info("Stop event received — shutting down")
 
@@ -176,7 +176,7 @@ if WIN32_AVAILABLE:
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "debug":
         print("Running in debug mode — press Ctrl+C to stop")
-        print("Portal: http://localhost:8080")
+        print("Portal: http://localhost:5743")
         try:
             run_service()
         except KeyboardInterrupt:
