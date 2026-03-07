@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS noaa_gauges (
     minor_flood_stage REAL,
     moderate_flood_stage REAL,
     major_flood_stage REAL,
-    severity TEXT NOT NULL DEFAULT 'Unknown',
+    severity TEXT NOT NULL DEFAULT 'Unknown' CHECK(severity IN ('Unknown', 'Normal', 'Action', 'Minor', 'Moderate', 'Major')),
     last_polled_at TEXT
 );
 
@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS page_subscribers (
     channel TEXT NOT NULL,
     channel_id TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'active',
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'unsubscribed')),
     opted_in_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(page_id, channel, channel_id)
 );
@@ -126,6 +126,7 @@ def get_db(db_path=None):
     """Return a new SQLite connection. Caller is responsible for closing it."""
     path = db_path or DEFAULT_DB
     conn = sqlite3.connect(path, check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys = ON")
     conn.row_factory = sqlite3.Row
     return conn
 

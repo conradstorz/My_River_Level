@@ -9,7 +9,8 @@ def test_init_db_creates_all_tables(tmp_db):
     tables = {row[0] for row in cursor.fetchall()}
     conn.close()
     expected = {"sites", "settings", "site_conditions", "subscribers",
-                "notifications", "pending_registrations"}
+                "notifications", "pending_registrations",
+                "user_pages", "noaa_gauges", "page_noaa_gauges", "page_subscribers"}
     assert expected.issubset(tables)
 
 def test_set_and_get_setting(tmp_db):
@@ -33,7 +34,6 @@ def test_init_db_seeds_default_settings(tmp_db):
     assert get_setting("historical_start_year", tmp_db) == "1980"
 
 def test_new_tables_created(tmp_db):
-    from db.models import init_db, get_db
     init_db(tmp_db)
     conn = get_db(tmp_db)
     tables = {r[0] for r in conn.execute(
