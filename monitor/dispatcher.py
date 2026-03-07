@@ -2,7 +2,7 @@ import threading
 import queue
 import logging
 
-from db.models import get_db
+from db.models import get_db, get_page_subscribers_for_gauge
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,15 @@ def format_reminder_message(data):
         f"Current condition: {data['severity']}\n"
         f"Level: {data['current_value']:.2f} {data['unit']} "
         f"({data['percentile']:.1f}th percentile)"
+    )
+
+
+def format_noaa_transition_message(data):
+    return (
+        f"⚠️ River Level Change: {data['station_name']} ({data['lid']})\n"
+        f"Condition changed: {data['previous_severity']} → {data['new_severity']}\n"
+        f"Current stage: {data['current_stage']:.2f} ft\n"
+        f"View: https://water.noaa.gov/gauges/{data['lid'].lower()}"
     )
 
 
@@ -101,6 +110,24 @@ class NotificationDispatcher(threading.Thread):
                 message = format_reminder_message(item["data"])
                 trigger_type = "reminder"
                 site_id = item["data"]["site_id"]
+            elif item["type"] == "noaa_transition":
+                message = format_noaa_transition_message(item["data"])
+                trigger_type = "noaa_transition"
+                gauge_id = item["data"]["gauge_id"]
+                subscribers = get_page_subscribers_for_gauge(gauge_id, self.db_path)
+                for sub in subscribers:
+                    adapter = self.adapters.get(sub["channel"])
+                    if adapter is None:
+                        continue
+                    try:
+                        success = adapter.send(sub["channel_id"], message)
+                        log_notification(sub["id"], None, sub["channel"],
+                                         message, trigger_type, success, db_path=self.db_path)
+                    except Exception as e:
+                        logger.exception("Failed noaa notify to %s/%s", sub["channel"], sub["channel_id"])
+                        log_notification(sub["id"], None, sub["channel"],
+                                         message, trigger_type, False, str(e), db_path=self.db_path)
+                return
             else:
                 logger.warning("Unknown notification type: %s", item.get("type"))
                 return

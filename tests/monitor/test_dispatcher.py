@@ -58,3 +58,44 @@ def test_dispatcher_calls_adapter_for_each_subscriber(tmp_db):
     mock_adapter.send.assert_called_once()
     args = mock_adapter.send.call_args[0]
     assert args[0] == "chat1"
+
+
+def test_noaa_transition_dispatched(tmp_db):
+    import queue
+    from unittest.mock import MagicMock
+    from db.models import (init_db, create_user_page, get_page_by_public_token,
+                           get_or_create_noaa_gauge, link_page_gauge, add_page_subscriber)
+    from monitor.dispatcher import NotificationDispatcher
+
+    init_db(tmp_db)
+    pub, _ = create_user_page("Test Page", tmp_db)
+    page = get_page_by_public_token(pub, tmp_db)
+    gid = get_or_create_noaa_gauge("MLUK2", "Ohio River", 21.0, 23.0, 30.0, 38.0, tmp_db)
+    link_page_gauge(page["id"], gid, tmp_db)
+    add_page_subscriber(page["id"], "sms", "+15025551234", "Alice", tmp_db)
+
+    mock_adapter = MagicMock()
+    mock_adapter.channel = "sms"
+    mock_adapter.send.return_value = True
+
+    q = queue.Queue()
+    q.put({
+        "type": "noaa_transition",
+        "data": {
+            "gauge_id": gid,
+            "lid": "MLUK2",
+            "station_name": "Ohio River at McAlpine Upper",
+            "previous_severity": "Normal",
+            "new_severity": "Action",
+            "current_stage": 21.5,
+        }
+    })
+
+    dispatcher = NotificationDispatcher(q, adapters=[mock_adapter], db_path=tmp_db)
+    dispatcher.run_once()
+
+    mock_adapter.send.assert_called_once()
+    args = mock_adapter.send.call_args[0]
+    assert args[0] == "+15025551234"
+    assert "MLUK2" in args[1] or "McAlpine" in args[1]
+    assert "Action" in args[1]
