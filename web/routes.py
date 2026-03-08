@@ -4,6 +4,7 @@ from flask import render_template, current_app, request, redirect, url_for, flas
 from db.models import get_db, get_setting, set_setting
 from monitor.site_validation import validate_usgs_site
 from monitor.phone_utils import normalize_e164
+from monitor.noaa_client import fetch_gauge_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +263,95 @@ def register_routes(app):
             abort(404)
         gauges = get_page_gauges(page["id"], db_path)
         return render_template("page_view.html", page=page, gauges=gauges)
+
+    @app.route("/edit/<edit_token>")
+    def page_edit(edit_token):
+        from flask import abort
+        from db.models import get_page_by_edit_token, get_page_gauges, get_active_page_subscribers
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+        gauges = get_page_gauges(page["id"], db_path)
+        subscribers = get_active_page_subscribers(page["id"], db_path)
+        return render_template("page_edit.html", page=page, gauges=gauges,
+                               subscribers=subscribers, edit_token=edit_token)
+
+    @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
+    def page_add_gauge(edit_token):
+        from flask import abort
+        from db.models import get_page_by_edit_token, get_or_create_noaa_gauge, link_page_gauge
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+        lid = request.form.get("lid", "").strip().upper()
+        if not lid:
+            flash("Gauge ID is required.", "danger")
+            return redirect(url_for("page_edit", edit_token=edit_token))
+        meta = fetch_gauge_metadata(lid)
+        if meta is None:
+            flash(f"Gauge '{lid}' not found in the NOAA database.", "danger")
+            return redirect(url_for("page_edit", edit_token=edit_token))
+        gauge_id = get_or_create_noaa_gauge(
+            lid, meta["station_name"],
+            meta["action_stage"], meta["minor_flood_stage"],
+            meta["moderate_flood_stage"], meta["major_flood_stage"],
+            db_path
+        )
+        link_page_gauge(page["id"], gauge_id, db_path)
+        flash(f"Added {meta['station_name']}.", "success")
+        return redirect(url_for("page_edit", edit_token=edit_token))
+
+    @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
+    def page_remove_gauge(edit_token):
+        from flask import abort
+        from db.models import get_page_by_edit_token, unlink_page_gauge
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+        gauge_id = request.form.get("gauge_id", type=int)
+        if gauge_id:
+            unlink_page_gauge(page["id"], gauge_id, db_path)
+            flash("Gauge removed.", "success")
+        return redirect(url_for("page_edit", edit_token=edit_token))
+
+    @app.route("/edit/<edit_token>/subscribe", methods=["POST"])
+    def page_subscribe(edit_token):
+        from flask import abort
+        from db.models import get_page_by_edit_token, add_page_subscriber
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+        channel = request.form.get("channel", "").strip()
+        channel_id = request.form.get("channel_id", "").strip()
+        display_name = request.form.get("display_name", "").strip()
+        if not channel or not channel_id:
+            flash("Channel and channel ID are required.", "danger")
+            return redirect(url_for("page_edit", edit_token=edit_token))
+        if channel in ("sms", "whatsapp"):
+            channel_id = normalize_e164(channel_id)
+        add_page_subscriber(page["id"], channel, channel_id, display_name, db_path)
+        flash("Subscribed to alerts for this page.", "success")
+        return redirect(url_for("page_edit", edit_token=edit_token))
+
+    @app.route("/edit/<edit_token>/unsubscribe", methods=["POST"])
+    def page_unsubscribe(edit_token):
+        from flask import abort
+        from db.models import get_page_by_edit_token, set_page_subscriber_status
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+        channel = request.form.get("channel", "").strip()
+        channel_id = request.form.get("channel_id", "").strip()
+        new_status = request.form.get("status", "unsubscribed")
+        if channel and channel_id:
+            set_page_subscriber_status(page["id"], channel, channel_id, new_status, db_path)
+            flash(f"Status updated to {new_status}.", "success")
+        return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():
