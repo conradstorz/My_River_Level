@@ -94,6 +94,45 @@ def wait_for_portal(timeout_seconds=45):
     return False
 
 
+def git_has_updates():
+    """Fetch from origin and return True if remote HEAD differs from local."""
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin"],
+            cwd=PROJECT_DIR, capture_output=True, check=False
+        )
+        local = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=PROJECT_DIR, capture_output=True, text=True
+        ).stdout.strip()
+        remote = subprocess.run(
+            ["git", "rev-parse", "@{upstream}"],
+            cwd=PROJECT_DIR, capture_output=True, text=True
+        ).stdout.strip()
+        return bool(local and remote and local != remote)
+    except Exception:
+        return False
+
+
+def git_pull():
+    """Pull latest commits; return the old HEAD hash (for diff checks)."""
+    old_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=PROJECT_DIR, capture_output=True, text=True
+    ).stdout.strip()
+    subprocess.run(["git", "pull"], cwd=PROJECT_DIR, capture_output=True)
+    return old_head
+
+
+def requirements_changed(old_head):
+    """Return True if requirements.txt changed between old_head and HEAD."""
+    result = subprocess.run(
+        ["git", "diff", old_head, "HEAD", "--name-only"],
+        cwd=PROJECT_DIR, capture_output=True, text=True
+    )
+    return "requirements.txt" in result.stdout
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():

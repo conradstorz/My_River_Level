@@ -37,3 +37,45 @@ def test_purge_pyc_leaves_py_files_intact(tmp_path):
     launch.purge_pyc(str(tmp_path))
 
     assert src.exists()
+
+
+def test_git_has_updates_returns_true_when_hashes_differ(mocker):
+    mocker.patch("launch.subprocess.run", side_effect=[
+        mocker.MagicMock(returncode=0),          # git fetch
+        mocker.MagicMock(stdout="abc123\n"),      # HEAD
+        mocker.MagicMock(stdout="def456\n"),      # @{upstream}
+    ])
+    assert launch.git_has_updates() is True
+
+
+def test_git_has_updates_returns_false_when_up_to_date(mocker):
+    mocker.patch("launch.subprocess.run", side_effect=[
+        mocker.MagicMock(returncode=0),
+        mocker.MagicMock(stdout="abc123\n"),
+        mocker.MagicMock(stdout="abc123\n"),
+    ])
+    assert launch.git_has_updates() is False
+
+
+def test_git_has_updates_returns_false_on_error(mocker):
+    mocker.patch("launch.subprocess.run", side_effect=Exception("no git"))
+    assert launch.git_has_updates() is False
+
+
+def test_git_pull_returns_old_head(mocker):
+    mock_run = mocker.patch("launch.subprocess.run")
+    mock_run.return_value = mocker.MagicMock(stdout="abc123\n", returncode=0)
+    old = launch.git_pull()
+    assert old == "abc123"
+
+
+def test_requirements_changed_true(mocker):
+    mocker.patch("launch.subprocess.run",
+                 return_value=mocker.MagicMock(stdout="requirements.txt\n"))
+    assert launch.requirements_changed("abc123") is True
+
+
+def test_requirements_changed_false(mocker):
+    mocker.patch("launch.subprocess.run",
+                 return_value=mocker.MagicMock(stdout=""))
+    assert launch.requirements_changed("abc123") is False
