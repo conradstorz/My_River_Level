@@ -121,11 +121,11 @@ class NotificationDispatcher(threading.Thread):
                         continue
                     try:
                         success = adapter.send(sub["channel_id"], message)
-                        log_notification(sub["id"], None, sub["channel"],
+                        log_notification(None, None, sub["channel"],
                                          message, trigger_type, success, db_path=self.db_path)
                     except Exception as e:
                         logger.exception("Failed noaa notify to %s/%s", sub["channel"], sub["channel_id"])
-                        log_notification(sub["id"], None, sub["channel"],
+                        log_notification(None, None, sub["channel"],
                                          message, trigger_type, False, str(e), db_path=self.db_path)
                 return
             else:
