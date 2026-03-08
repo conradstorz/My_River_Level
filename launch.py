@@ -67,6 +67,22 @@ def start_windows_service():
     subprocess.run(["net", "start", SERVICE_NAME], capture_output=True)
 
 
+def pip_install():
+    """Install/update dependencies from requirements.txt."""
+    req = os.path.join(PROJECT_DIR, "requirements.txt")
+    subprocess.run(
+        [PYTHON, "-m", "pip", "install", "-r", req],
+        cwd=PROJECT_DIR
+    )
+
+
+def restart_service():
+    """Stop then start the Windows service."""
+    subprocess.run(["net", "stop", SERVICE_NAME], capture_output=True)
+    time.sleep(2)
+    subprocess.run(["net", "start", SERVICE_NAME], capture_output=True)
+
+
 def launch_debug_mode():
     """Start service.py debug in a new console window."""
     subprocess.Popen(

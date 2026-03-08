@@ -79,3 +79,20 @@ def test_requirements_changed_false(mocker):
     mocker.patch("launch.subprocess.run",
                  return_value=mocker.MagicMock(stdout=""))
     assert launch.requirements_changed("abc123") is False
+
+
+def test_pip_install_calls_pip(mocker):
+    mock_run = mocker.patch("launch.subprocess.run")
+    launch.pip_install()
+    mock_run.assert_called_once()
+    args = mock_run.call_args[0][0]
+    assert "pip" in " ".join(args) or args[1] == "-m"
+    assert "requirements.txt" in " ".join(args)
+
+
+def test_restart_service_stops_then_starts(mocker):
+    mock_run = mocker.patch("launch.subprocess.run")
+    launch.restart_service()
+    calls = [c[0][0] for c in mock_run.call_args_list]
+    assert any("stop" in " ".join(c).lower() for c in calls)
+    assert any("start" in " ".join(c).lower() for c in calls)
