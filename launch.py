@@ -17,6 +17,11 @@ import time
 import webbrowser
 import urllib.request
 
+from rich.console import Console
+from rich.panel import Panel
+
+console = Console()
+
 PORTAL_URL = "http://localhost:5743"
 SERVICE_NAME = "RiverMonitor"
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -152,28 +157,66 @@ def requirements_changed(old_head):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    console.print(Panel("[bold cyan]River Monitor Control[/bold cyan]", expand=False))
+
+    # ── Check for updates ────────────────────────────────────────────────────
+    console.print("[dim]Checking for updates...[/dim]")
+    has_updates = git_has_updates()
+
+    updated = False
+    if has_updates:
+        console.print("[yellow]Updates available — pulling...[/yellow]")
+        old_head = git_pull()
+        console.print("[green]Code updated.[/green]")
+
+        console.print("[dim]Purging stale .pyc files...[/dim]")
+        purge_pyc(PROJECT_DIR)
+        console.print("[green]Bytecode cache cleared.[/green]")
+
+        if requirements_changed(old_head):
+            console.print("[yellow]requirements.txt changed — installing packages...[/yellow]")
+            pip_install()
+            console.print("[green]Packages installed.[/green]")
+
+        updated = True
+    else:
+        console.print("[green]Already up to date.[/green]")
+
+    # ── Manage service ───────────────────────────────────────────────────────
     state = service_state()
 
-    if state == "RUNNING":
-        # Already up — go straight to browser
-        webbrowser.open(PORTAL_URL)
-        return
+    if state == "RUNNING" and updated:
+        console.print("[yellow]Restarting service to apply updates...[/yellow]")
+        restart_service()
+        console.print("[green]Service restarted.[/green]")
 
-    if state == "STOPPED":
+    elif state == "RUNNING":
+        console.print("[green]Service is running.[/green]")
+
+    elif state == "STOPPED":
+        console.print("[yellow]Starting service...[/yellow]")
         start_windows_service()
-        if wait_for_portal():
-            webbrowser.open(PORTAL_URL)
-        else:
-            # Service didn't come up in time — open anyway (shows error in browser)
-            webbrowser.open(PORTAL_URL)
-        return
 
-    # NOT_FOUND or UNKNOWN — launch debug mode (works without admin rights)
+    else:
+        # NOT_FOUND or UNKNOWN — no service installed, use debug mode
+        if not portal_responding():
+            console.print("[yellow]Service not installed — launching in debug mode...[/yellow]")
+            launch_debug_mode()
+
+    # ── Wait for portal ──────────────────────────────────────────────────────
     if not portal_responding():
-        launch_debug_mode()
-        wait_for_portal()
+        console.print("[dim]Waiting for portal to respond...[/dim]")
+        if not wait_for_portal():
+            console.print("[red]Portal did not respond in time — opening browser anyway.[/red]")
+        else:
+            console.print("[green]Portal is ready.[/green]")
 
+    # ── Open browser ─────────────────────────────────────────────────────────
+    console.print(f"[cyan]Opening {PORTAL_URL}[/cyan]")
     webbrowser.open(PORTAL_URL)
+
+    console.print("\n[dim]Press Enter to close this window.[/dim]")
+    input()
 
 
 if __name__ == "__main__":
