@@ -11,88 +11,111 @@ venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
-# Run monitor with default config
+# Run tests
+pytest
+
+# Run a specific test file
+pytest tests/monitor/test_polling.py
+
+# Run the service (development/debug mode — no Windows service manager needed)
+python service.py debug
+
+# Run the standalone CLI monitor (legacy, does not use the database)
 python river_monitor.py
-
-# Run with a named config
 python river_monitor.py --config Bushmans
-
-# List available configs
 python river_monitor.py --list-configs
 
-# Run interactive setup wizard
+# Run interactive setup wizard (finds and adds USGS gauges)
 python setup_wizard.py
-python setup_wizard.py --config <name>   # create/overwrite a named config
-python setup_wizard.py --list            # list existing configs
+
+# Create a Windows desktop shortcut/launcher
+python create_shortcut.py
 ```
 
-There is no test suite in this project.
+## Service Commands (run as Administrator)
+
+```bash
+python service.py install
+python service.py start
+python service.py stop
+python service.py remove
+```
+
+The service runs on `http://localhost:5743`. Logs go to `logs/river_monitor.log` (rotating, 5 MB, 3 backups).
 
 ## Shell commands
 
 Never chain or pipe bash commands. Run one command at a time. Do not use `&&`, `||`, `|`, or `;` to combine commands in a single Bash call.
 
-## Service Commands (run as Administrator)
-
-```bash
-# Install and manage the Windows service
-python service.py install
-python service.py start
-python service.py stop
-python service.py remove
-
-# Run without service manager (development/debug)
-python service.py debug
-```
-
-The service runs on `http://localhost:5743`. Logs go to `logs/river_monitor.log`.
-On first start, if `config.py` exists its sites and settings are automatically migrated to the SQLite database at `db/river_monitor.db`.
-
 ## Architecture
 
-The project monitors USGS stream gauges for extreme water conditions (flood/drought) by comparing real-time readings against percentile thresholds derived from historical data.
+The primary entry point is `service.py`, which starts three daemon threads sharing a single `notification_queue`:
 
-### Core flow (`river_monitor.py`)
+1. **Polling thread** (`monitor/polling.py`) — fetches USGS data on a configurable interval and enqueues notifications when thresholds are crossed.
+2. **Scheduler thread** (`monitor/scheduler.py`) — enforces reminder intervals so alerts aren't sent too frequently for persistent conditions.
+3. **Dispatcher thread** (`monitor/dispatcher.py`) — reads from the queue and routes messages to notification adapters.
+4. **Flask web server** (`web/app.py`, `web/routes.py`) — runs in the main thread; provides the management portal and handles webhooks.
 
-1. `main()` parses args, loads a config module dynamically via `importlib.util`, and detects first-run (no sites configured).
-2. `RiverMonitor` is instantiated with a list of USGS site numbers and the config module.
-3. For each site, `check_site_conditions()` fetches:
-   - **Current data** via `nwis.get_iv()` — interval values for the past 7 days
-   - **Historical data** via `nwis.get_dv()` — daily values from `HISTORICAL_START_YEAR` to today
-4. `calculate_percentiles()` manually computes where the current value falls in the historical distribution using numpy (not hyswap).
-5. `classify_condition()` maps percentile to severity using thresholds from config.
-6. `print_report()` renders the formatted report; nearby sites are only shown when extreme conditions are present.
+### Module layout
 
-### Configuration system
+```
+service.py              — Windows service entry point; starts all threads
+monitor/
+  polling.py            — USGS data fetch loop; uses dataretrieval nwis.get_iv / get_dv
+  scheduler.py          — Throttles repeat alerts; tracks last-notified timestamps
+  dispatcher.py         — Dequeues notifications and calls adapters
+  site_validation.py    — Validates USGS site numbers against the API
+  phone_utils.py        — Phone number normalization for Twilio channels
+  adapters/
+    telegram.py         — Telegram Bot API
+    sms.py              — Twilio SMS
+    whatsapp.py         — Twilio WhatsApp
+    facebook.py         — Facebook Messenger webhook
+web/
+  app.py                — Flask app factory
+  routes.py             — Dashboard, Sites, Subscribers, Settings, Broadcast, webhooks
+db/
+  models.py             — SQLite schema, init, and all DB helper functions
+  migration.py          — One-time import of legacy config.py into the database
+river_monitor.py        — Standalone CLI monitor (original script, no DB dependency)
+setup_wizard.py         — Interactive CLI: geocodes address, finds nearby gauges, writes DB
+launch.py               — Desktop launcher: opens portal or starts service as needed
+create_shortcut.py      — Creates a Windows .lnk shortcut to launch.py
+tests/
+  conftest.py           — Shared pytest fixtures (tmp_db)
+  db/                   — Tests for models and migration
+  monitor/              — Tests for polling, scheduling, dispatching, phone utils, site validation
+  web/                  — Tests for all Flask routes
+```
 
-Config files are plain Python modules (e.g., `config.py`, `Bushmans.py`) loaded dynamically. Multiple named configs can coexist. Each exposes:
+### Data flow
 
-| Variable | Purpose |
-|---|---|
-| `MONITORING_SITES` | List of USGS 8-digit site number strings |
-| `LOCATION` | `{"latitude": float, "longitude": float}` for bounding-box site discovery |
-| `SEARCH_RADIUS_MILES` | Radius used when discovering sites dynamically |
-| `PARAMETER_CODE` | `"00060"` (discharge, cfs) or `"00065"` (gage height, ft) |
-| `LOW/HIGH/VERY_LOW/VERY_HIGH_FLOW_PERCENTILE` | Alert thresholds |
-| `HISTORICAL_START_YEAR` | Oldest year to pull for baseline statistics |
+1. `polling.py` calls `nwis.get_iv()` (interval values, last 7 days) and `nwis.get_dv()` (daily values since `historical_start_year`) for each active site.
+2. Percentiles are computed with numpy by ranking the current value against the historical distribution.
+3. `classify_condition()` maps percentile to severity: SEVERE_LOW / LOW / NORMAL / HIGH / SEVERE_HIGH.
+4. When a threshold is crossed (and the scheduler allows it), a message dict is pushed onto `notification_queue`.
+5. `dispatcher.py` pops from the queue and calls the relevant adapter(s).
 
-If `MONITORING_SITES` is empty but `LOCATION` has coordinates, the monitor auto-selects the top 5 nearby sites.
+### Configuration and database
 
-### Setup wizard (`setup_wizard.py`)
+All runtime settings are stored in `db/river_monitor.db` (SQLite). There are no config files at runtime — the legacy `config.py` module format is only used by `river_monitor.py` and by the one-time migration in `db/migration.py`.
 
-Standalone interactive tool that:
-1. Geocodes an address via Nominatim (OpenStreetMap REST API)
-2. Finds active USGS gauges in a bounding box via `nwis.what_sites()`
-3. Shows a numbered list with recent data previews for selection
-4. Writes a new `<name>.py` config file
+Key settings stored in the DB: `poll_interval_minutes`, `low_percentile`, `high_percentile`, `very_low_percentile`, `very_high_percentile`, `reminder_low_high_hours`, `reminder_severe_hours`, `historical_start_year`, `search_radius_miles`, and per-channel credentials (Telegram token, Twilio SID/token/numbers, Facebook tokens).
 
-### USGS API (`dataretrieval`)
+### USGS API
+
+Uses the `dataretrieval` package (`nwis` module):
 
 | Call | Purpose |
 |---|---|
-| `nwis.what_sites(bBox=..., parameterCd=..., siteStatus="active")` | Discover gauges in bounding box |
-| `nwis.get_iv(sites=..., parameterCd=..., start=..., end=...)` | Real-time/interval values |
-| `nwis.get_dv(sites=..., parameterCd=..., start=..., end=...)` | Historical daily values |
-| `nwis.get_info(sites=...)` | Site metadata (station name, etc.) |
+| `nwis.get_iv(sites, parameterCd, start, end)` | Real-time interval values |
+| `nwis.get_dv(sites, parameterCd, start, end)` | Historical daily values |
+| `nwis.what_sites(bBox, parameterCd, siteStatus)` | Discover gauges in bounding box |
+| `nwis.get_info(sites)` | Site metadata |
 
-Column names returned by `get_iv` use the pattern `"00060"` or `"00060_00000"`. Daily values (`get_dv`) use `"00060_Mean"`. The code filters columns by `startswith(param_code)` or `param_code in col`.
+Column names from `get_iv` use pattern `"00060"` or `"00060_00000"`; from `get_dv` use `"00060_Mean"`. Filtering is done with `startswith(param_code)` or `param_code in col`.
+
+### Webhook endpoints
+
+- `POST /webhook/twilio` — Twilio SMS/WhatsApp status callbacks and inbound messages (`JOIN`/`STOP`)
+- `GET|POST /webhook/facebook` — Facebook Messenger verify and inbound messages
