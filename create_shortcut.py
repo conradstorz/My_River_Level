@@ -26,8 +26,7 @@ LAUNCH_SCRIPT = os.path.join(PROJECT_DIR, "launch.py")
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")
 SHORTCUT_PATH = os.path.join(DESKTOP, "River Monitor.lnk")
 
-# Use pythonw.exe if available (suppresses console window), otherwise python.exe
-EXECUTOR = PYTHONW if os.path.exists(PYTHONW) else PYTHON
+EXECUTOR = PYTHON  # use python.exe so the terminal window is visible
 
 # Icon: prefer python.exe icon from the venv
 ICON_PATH = EXECUTOR if os.path.exists(EXECUTOR) else PYTHON
@@ -40,7 +39,7 @@ def create():
     shortcut.Arguments = f'"{LAUNCH_SCRIPT}"'
     shortcut.WorkingDirectory = PROJECT_DIR
     shortcut.IconLocation = f"{ICON_PATH},0"
-    shortcut.Description = "Open the River Level Monitor web portal"
+    shortcut.Description = "River Monitor control tool — update, start, and open portal"
     shortcut.Save()
     print(f"Shortcut created: {SHORTCUT_PATH}")
     print(f"  Runs: {EXECUTOR} \"{LAUNCH_SCRIPT}\"")
