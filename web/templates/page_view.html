@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ page.page_name }}{% endblock %}
+{% block head %}<meta http-equiv="refresh" content="300">{% endblock %}
+{% block content %}
+<h1 class="mb-1">{{ page.page_name }}</h1>
+<p class="text-muted small mb-4">Auto-refreshes every 5 minutes.</p>
+
+{% if gauges %}
+  {% for g in gauges %}
+  {% set badge = "success" if g.severity == "Normal"
+                 else "warning" if g.severity in ("Action", "Minor")
+                 else "danger" if g.severity in ("Moderate", "Major")
+                 else "secondary" %}
+  <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <strong>{{ g.station_name }}</strong>
+      <span class="badge bg-{{ badge }}">{{ g.severity or "No data" }}</span>
+    </div>
+    <div class="card-body text-center">
+      <img src="https://water.noaa.gov/resources/hydrographs/{{ g.lid | lower }}_hg.png"
+           alt="Hydrograph for {{ g.station_name }}"
+           class="img-fluid"
+           style="max-width:600px;">
+      {% if g.current_stage is not none %}
+      <p class="mt-2 mb-0">Current stage: <strong>{{ "%.2f"|format(g.current_stage) }} ft</strong>
+        {% if g.last_polled_at %}<span class="text-muted small">(as of {{ g.last_polled_at }})</span>{% endif %}
+      </p>
+      {% endif %}
+    </div>
+    <div class="card-footer text-end">
+      <a href="https://water.noaa.gov/gauges/{{ g.lid | lower }}" target="_blank" class="btn btn-sm btn-outline-secondary">
+        Full NOAA Page ↗
+      </a>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+<div class="alert alert-info">No gauges added yet. Ask the page owner to add some.</div>
+{% endif %}
+
+<hr>
+<p class="text-muted small">
+  Want alerts when conditions change? Contact the page owner for a subscribe link.
+</p>
+{% endblock %}

@@ -252,6 +252,17 @@ def register_routes(app):
                                    edit_token=edit_token)
         return render_template("page_new.html")
 
+    @app.route("/view/<public_token>")
+    def page_view(public_token):
+        from flask import abort
+        from db.models import get_page_by_public_token, get_page_gauges
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_public_token(public_token, db_path)
+        if not page or not page["active"]:
+            abort(404)
+        gauges = get_page_gauges(page["id"], db_path)
+        return render_template("page_view.html", page=page, gauges=gauges)
+
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():
         db_path = current_app.config["DB_PATH"]
