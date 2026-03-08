@@ -115,6 +115,25 @@ def register_routes(app):
                 (channel, clean_from)
             )
             conn.commit()
+        # Page subscriber self-service
+        if body == "PAUSE":
+            conn.execute(
+                "UPDATE page_subscribers SET status='paused' WHERE channel=? AND channel_id=?",
+                (channel, clean_from)
+            )
+            conn.commit()
+        elif body == "RESUME":
+            conn.execute(
+                "UPDATE page_subscribers SET status='active' WHERE channel=? AND channel_id=?",
+                (channel, clean_from)
+            )
+            conn.commit()
+        elif body in ("STOP", "UNSUBSCRIBE"):
+            conn.execute(
+                "UPDATE page_subscribers SET status='unsubscribed' WHERE channel=? AND channel_id=?",
+                (channel, clean_from)
+            )
+            conn.commit()
         conn.close()
         return '<?xml version="1.0" encoding="UTF-8"?><Response></Response>', 200, {"Content-Type": "text/xml"}
 

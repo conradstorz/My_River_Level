@@ -201,3 +201,61 @@ def test_admin_toggle_page_enables(client):
     assert resp.status_code == 200
     updated = get_page_by_public_token(pub, db_path)
     assert updated["active"] == 1
+
+
+def test_twilio_pause_page_subscriber(client):
+    from db.models import (create_user_page, get_page_by_public_token,
+                           add_page_subscriber, get_db)
+    db_path = client.application.config["DB_PATH"]
+    pub, _ = create_user_page("Test", db_path)
+    page = get_page_by_public_token(pub, db_path)
+    add_page_subscriber(page["id"], "sms", "+15025551234", "Alice", db_path)
+
+    resp = client.post("/webhook/twilio",
+                       data={"From": "+15025551234", "Body": "PAUSE", "To": "+18005550000"})
+    assert resp.status_code == 200
+    conn = get_db(db_path)
+    row = conn.execute(
+        "SELECT status FROM page_subscribers WHERE channel_id=?", ("+15025551234",)
+    ).fetchone()
+    conn.close()
+    assert row["status"] == "paused"
+
+
+def test_twilio_resume_page_subscriber(client):
+    from db.models import (create_user_page, get_page_by_public_token,
+                           add_page_subscriber, set_page_subscriber_status, get_db)
+    db_path = client.application.config["DB_PATH"]
+    pub, _ = create_user_page("Test", db_path)
+    page = get_page_by_public_token(pub, db_path)
+    add_page_subscriber(page["id"], "sms", "+15025551234", "Bob", db_path)
+    set_page_subscriber_status(page["id"], "sms", "+15025551234", "paused", db_path)
+
+    resp = client.post("/webhook/twilio",
+                       data={"From": "+15025551234", "Body": "RESUME", "To": "+18005550000"})
+    assert resp.status_code == 200
+    conn = get_db(db_path)
+    row = conn.execute(
+        "SELECT status FROM page_subscribers WHERE channel_id=?", ("+15025551234",)
+    ).fetchone()
+    conn.close()
+    assert row["status"] == "active"
+
+
+def test_twilio_stop_also_updates_page_subscribers(client):
+    from db.models import (create_user_page, get_page_by_public_token,
+                           add_page_subscriber, get_db)
+    db_path = client.application.config["DB_PATH"]
+    pub, _ = create_user_page("Test", db_path)
+    page = get_page_by_public_token(pub, db_path)
+    add_page_subscriber(page["id"], "sms", "+15025551234", "Carol", db_path)
+
+    resp = client.post("/webhook/twilio",
+                       data={"From": "+15025551234", "Body": "STOP", "To": "+18005550000"})
+    assert resp.status_code == 200
+    conn = get_db(db_path)
+    row = conn.execute(
+        "SELECT status FROM page_subscribers WHERE channel_id=?", ("+15025551234",)
+    ).fetchone()
+    conn.close()
+    assert row["status"] == "unsubscribed"
