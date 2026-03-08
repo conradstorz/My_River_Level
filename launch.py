@@ -12,6 +12,7 @@ Run without a console window by pointing the shortcut at pythonw.exe.
 import os
 import sys
 import subprocess
+import shutil
 import time
 import webbrowser
 import urllib.request
@@ -21,6 +22,24 @@ SERVICE_NAME = "RiverMonitor"
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 PYTHON = sys.executable
 PYTHONW = os.path.join(os.path.dirname(PYTHON), "pythonw.exe")
+
+
+def purge_pyc(project_dir):
+    """Delete all .pyc files and __pycache__ dirs under project_dir."""
+    for root, dirs, files in os.walk(project_dir):
+        for name in files:
+            if name.endswith(".pyc"):
+                try:
+                    os.remove(os.path.join(root, name))
+                except OSError:
+                    pass
+        if "__pycache__" in dirs:
+            cache_path = os.path.join(root, "__pycache__")
+            try:
+                shutil.rmtree(cache_path)
+            except OSError:
+                pass
+            dirs.remove("__pycache__")  # don't recurse into it
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
