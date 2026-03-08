@@ -2,6 +2,7 @@ import logging
 
 from flask import render_template, current_app, request, redirect, url_for, flash
 from db.models import get_db, get_setting, set_setting
+from version import VERSION, RELEASE_DATE
 from monitor.site_validation import validate_usgs_site
 from monitor.phone_utils import normalize_e164
 from monitor.noaa_client import fetch_gauge_metadata
@@ -52,7 +53,13 @@ def register_routes(app):
             ORDER BY n.sent_at DESC LIMIT 20
         """).fetchall()
         conn.close()
-        return render_template("dashboard.html", sites=sites, recent_notifications=recent_notifications)
+        return render_template(
+            "dashboard.html",
+            sites=sites,
+            recent_notifications=recent_notifications,
+            version=VERSION,
+            release_date=RELEASE_DATE,
+        )
 
     @app.route("/subscribers")
     def subscribers():

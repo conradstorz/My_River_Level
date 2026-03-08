@@ -34,3 +34,13 @@ def test_dashboard_shows_recent_notifications(client, tmp_db):
     conn.close()
     response = client.get("/")
     assert b"Test alert message" in response.data
+
+
+def test_dashboard_shows_version(client):
+    response = client.get("/")
+    assert b"1.0.0" in response.data
+
+
+def test_dashboard_shows_release_date(client):
+    response = client.get("/")
+    assert b"2026-03-08" in response.data
