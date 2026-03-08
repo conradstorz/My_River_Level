@@ -162,3 +162,42 @@ def test_unsubscribe_from_page(client):
                        follow_redirects=True)
     assert resp.status_code == 200
     assert get_active_page_subscribers(page["id"], db_path) == []
+
+
+def test_admin_pages_list(client):
+    from db.models import create_user_page
+    db_path = client.application.config["DB_PATH"]
+    create_user_page("Alpha", db_path)
+    create_user_page("Beta", db_path)
+    resp = client.get("/admin/pages")
+    assert resp.status_code == 200
+    assert b"Alpha" in resp.data
+    assert b"Beta" in resp.data
+
+
+def test_admin_toggle_page_disables(client):
+    from db.models import create_user_page, get_page_by_public_token
+    db_path = client.application.config["DB_PATH"]
+    pub, _ = create_user_page("Togglable", db_path)
+    page = get_page_by_public_token(pub, db_path)
+    resp = client.post(f"/admin/pages/{page['id']}/toggle", follow_redirects=True)
+    assert resp.status_code == 200
+    updated = get_page_by_public_token(pub, db_path)
+    assert updated["active"] == 0
+
+
+def test_admin_toggle_page_enables(client):
+    from db.models import create_user_page, get_page_by_public_token, get_db
+    db_path = client.application.config["DB_PATH"]
+    pub, _ = create_user_page("Disabled", db_path)
+    page = get_page_by_public_token(pub, db_path)
+    # Disable first
+    conn = get_db(db_path)
+    conn.execute("UPDATE user_pages SET active=0 WHERE id=?", (page["id"],))
+    conn.commit()
+    conn.close()
+    # Toggle back to active
+    resp = client.post(f"/admin/pages/{page['id']}/toggle", follow_redirects=True)
+    assert resp.status_code == 200
+    updated = get_page_by_public_token(pub, db_path)
+    assert updated["active"] == 1

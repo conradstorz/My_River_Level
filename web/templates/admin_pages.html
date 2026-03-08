@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Admin — Pages{% endblock %}
+{% block content %}
+<h1 class="mb-4">User Pages</h1>
+{% if pages %}
+<table class="table table-striped">
+  <thead><tr>
+    <th>Name</th><th>Gauges</th><th>Subscribers</th>
+    <th>Created</th><th>Status</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for p in pages %}
+  <tr class="{{ '' if p.active else 'table-secondary text-muted' }}">
+    <td>
+      {{ p.page_name }}<br>
+      <small class="text-muted">
+        <a href="{{ url_for('page_view', public_token=p.public_token) }}" target="_blank">View ↗</a>
+      </small>
+    </td>
+    <td>{{ p.gauge_count }}</td>
+    <td>{{ p.subscriber_count }}</td>
+    <td><small>{{ p.created_at }}</small></td>
+    <td>
+      <span class="badge bg-{{ 'success' if p.active else 'secondary' }}">
+        {{ 'Active' if p.active else 'Disabled' }}
+      </span>
+    </td>
+    <td>
+      <form method="post" action="{{ url_for('admin_toggle_page', page_id=p.id) }}">
+        <button class="btn btn-sm btn-outline-{{ 'danger' if p.active else 'success' }}">
+          {{ 'Disable' if p.active else 'Enable' }}
+        </button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No pages created yet.</p>
+{% endif %}
+<a href="{{ url_for('page_new') }}" class="btn btn-primary">+ Create New Page</a>
+{% endblock %}

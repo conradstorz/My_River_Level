@@ -353,6 +353,33 @@ def register_routes(app):
             flash(f"Status updated to {new_status}.", "success")
         return redirect(url_for("page_edit", edit_token=edit_token))
 
+    @app.route("/admin/pages")
+    def admin_pages():
+        db_path = current_app.config["DB_PATH"]
+        conn = get_db(db_path)
+        pages = conn.execute("""
+            SELECT up.*,
+                   COUNT(DISTINCT png.noaa_gauge_id) AS gauge_count,
+                   COUNT(DISTINCT ps.id) AS subscriber_count
+            FROM user_pages up
+            LEFT JOIN page_noaa_gauges png ON png.page_id = up.id
+            LEFT JOIN page_subscribers ps ON ps.page_id = up.id AND ps.status='active'
+            GROUP BY up.id
+            ORDER BY up.created_at DESC
+        """).fetchall()
+        conn.close()
+        return render_template("admin_pages.html", pages=pages)
+
+    @app.route("/admin/pages/<int:page_id>/toggle", methods=["POST"])
+    def admin_toggle_page(page_id):
+        db_path = current_app.config["DB_PATH"]
+        conn = get_db(db_path)
+        conn.execute("UPDATE user_pages SET active = 1 - active WHERE id=?", (page_id,))
+        conn.commit()
+        conn.close()
+        flash("Page status updated.", "success")
+        return redirect(url_for("admin_pages"))
+
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():
         db_path = current_app.config["DB_PATH"]
