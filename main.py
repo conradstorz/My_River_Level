@@ -7,6 +7,7 @@ Usage: python main.py
 import os
 import sys
 import queue
+import signal
 import threading
 import logging
 import logging.handlers
@@ -69,6 +70,14 @@ def main():
     init_db()
 
     stop_event = threading.Event()
+
+    def handle_signal(signum, frame):
+        logger.info("Signal %s received — shutting down", signum)
+        stop_event.set()
+
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
     notif_queue = queue.Queue()
 
     all_adapters = build_adapters()
@@ -106,7 +115,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print("\nShutting down...")
+    main()

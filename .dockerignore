@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+
+# Logs
+logs/
+
+# Database files
+*.db
+
+# Git
+.git/
+.gitignore
+
+# Development
+tests/
+docs/
+.worktrees/
+
+# Environment
+.env
