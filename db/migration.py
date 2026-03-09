@@ -4,19 +4,21 @@ from db.models import get_db, set_setting
 def migrate_from_config(config_module, db_path=None):
     """
     Seed the database from a legacy config.py module.
-    Safe to call multiple times — uses INSERT OR IGNORE for sites.
+    Safe to call multiple times — uses INSERT ... ON CONFLICT DO NOTHING for sites.
     """
     conn = get_db(db_path)
+    cur = conn.cursor()
 
     # Migrate sites
     param = getattr(config_module, "PARAMETER_CODE", "00060")
     for site_number in getattr(config_module, "MONITORING_SITES", []):
-        conn.execute(
-            "INSERT OR IGNORE INTO sites (site_number, parameter_code) VALUES (?, ?)",
+        cur.execute(
+            "INSERT INTO sites (site_number, parameter_code) VALUES (%s, %s) ON CONFLICT (site_number) DO NOTHING",
             (site_number, param)
         )
 
     conn.commit()
+    cur.close()
     conn.close()
 
     # Migrate scalar settings

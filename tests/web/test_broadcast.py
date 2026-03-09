@@ -20,8 +20,10 @@ def test_broadcast_get_returns_200(client_with_queue):
 def test_broadcast_post_puts_item_on_queue(client_with_queue, tmp_db):
     c, q = client_with_queue
     conn = get_db(tmp_db)
-    conn.execute("INSERT INTO subscribers (channel, channel_id, active) VALUES ('telegram', 'chat1', 1)")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO subscribers (channel, channel_id, active) VALUES ('telegram', 'chat1', 1)")
     conn.commit()
+    cur.close()
     conn.close()
     response = c.post("/broadcast", data={
         "message": "Test broadcast message",

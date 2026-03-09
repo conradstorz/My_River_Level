@@ -47,11 +47,13 @@ class TelegramAdapter(threading.Thread):
     async def _handle_start(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         chat_id = str(update.effective_chat.id)
         conn = get_db(self.db_path)
-        conn.execute(
-            "INSERT OR IGNORE INTO pending_registrations (channel, channel_id) VALUES ('telegram', ?)",
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO pending_registrations (channel, channel_id) VALUES ('telegram', %s) ON CONFLICT (channel, channel_id) DO NOTHING",
             (chat_id,)
         )
         conn.commit()
+        cur.close()
         conn.close()
         await update.message.reply_text(
             "Welcome to the River Level Monitor!\n"
@@ -62,30 +64,36 @@ class TelegramAdapter(threading.Thread):
         chat_id = str(update.effective_chat.id)
         name = update.effective_user.full_name or "Telegram User"
         conn = get_db(self.db_path)
-        conn.execute(
-            "INSERT OR IGNORE INTO subscribers (display_name, channel, channel_id) VALUES (?, 'telegram', ?)",
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO subscribers (display_name, channel, channel_id)
+               VALUES (%s, 'telegram', %s)
+               ON CONFLICT (channel, channel_id) DO NOTHING""",
             (name, chat_id)
         )
-        conn.execute(
-            "UPDATE subscribers SET active=1, display_name=? WHERE channel='telegram' AND channel_id=?",
+        cur.execute(
+            "UPDATE subscribers SET active=1, display_name=%s WHERE channel='telegram' AND channel_id=%s",
             (name, chat_id)
         )
-        conn.execute(
-            "DELETE FROM pending_registrations WHERE channel='telegram' AND channel_id=?",
+        cur.execute(
+            "DELETE FROM pending_registrations WHERE channel='telegram' AND channel_id=%s",
             (chat_id,)
         )
         conn.commit()
+        cur.close()
         conn.close()
         await update.message.reply_text("✓ You are now subscribed to river level alerts.")
 
     async def _handle_unsubscribe(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         chat_id = str(update.effective_chat.id)
         conn = get_db(self.db_path)
-        conn.execute(
-            "UPDATE subscribers SET active=0 WHERE channel='telegram' AND channel_id=?",
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE subscribers SET active=0 WHERE channel='telegram' AND channel_id=%s",
             (chat_id,)
         )
         conn.commit()
+        cur.close()
         conn.close()
         await update.message.reply_text("You have been unsubscribed.")
 

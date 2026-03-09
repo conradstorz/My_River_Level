@@ -16,9 +16,11 @@ def test_dashboard_shows_no_sites_message_when_empty(client):
 
 def test_dashboard_shows_site_condition(client, tmp_db):
     conn = get_db(tmp_db)
-    conn.execute("INSERT INTO sites (id, site_number, station_name, active) VALUES (1, '03277200', 'Test Creek', 1)")
-    conn.execute("INSERT INTO site_conditions (site_id, current_value, unit, percentile, severity) VALUES (1, 500.0, 'cfs', 45.0, 'NORMAL')")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO sites (id, site_number, station_name, active) VALUES (1, '03277200', 'Test Creek', 1)")
+    cur.execute("INSERT INTO site_conditions (site_id, current_value, unit, percentile, severity) VALUES (1, 500.0, 'cfs', 45.0, 'NORMAL')")
     conn.commit()
+    cur.close()
     conn.close()
     response = client.get("/")
     assert b"Test Creek" in response.data
@@ -26,11 +28,13 @@ def test_dashboard_shows_site_condition(client, tmp_db):
 
 def test_dashboard_shows_recent_notifications(client, tmp_db):
     conn = get_db(tmp_db)
-    conn.execute("INSERT INTO sites (id, site_number, station_name) VALUES (1, '03277200', 'Test Creek')")
-    conn.execute("INSERT INTO subscribers (id, channel, channel_id) VALUES (1, 'telegram', 'abc')")
-    conn.execute("""INSERT INTO notifications (subscriber_id, site_id, channel, message_text, trigger_type)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO sites (id, site_number, station_name) VALUES (1, '03277200', 'Test Creek')")
+    cur.execute("INSERT INTO subscribers (id, channel, channel_id) VALUES (1, 'telegram', 'abc')")
+    cur.execute("""INSERT INTO notifications (subscriber_id, site_id, channel, message_text, trigger_type)
                     VALUES (1, 1, 'telegram', 'Test alert message', 'transition')""")
     conn.commit()
+    cur.close()
     conn.close()
     response = client.get("/")
     assert b"Test alert message" in response.data

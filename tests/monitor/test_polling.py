@@ -17,15 +17,21 @@ def test_detect_transition_normal_to_severe():
 def test_record_condition_inserts_row(tmp_db):
     init_db(tmp_db)
     conn = get_db(tmp_db)
-    conn.execute("INSERT INTO sites (site_number) VALUES ('12345678')")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO sites (site_number) VALUES ('12345678')")
     conn.commit()
-    site_id = conn.execute("SELECT id FROM sites WHERE site_number='12345678'").fetchone()["id"]
+    cur.execute("SELECT id FROM sites WHERE site_number='12345678'")
+    site_id = cur.fetchone()["id"]
+    cur.close()
     conn.close()
 
     record_condition(site_id, 500.0, "cfs", 45.2, "NORMAL", tmp_db)
 
     conn = get_db(tmp_db)
-    row = conn.execute("SELECT * FROM site_conditions WHERE site_id=?", (site_id,)).fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM site_conditions WHERE site_id=%s", (site_id,))
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     assert row["current_value"] == 500.0
     assert row["severity"] == "NORMAL"
@@ -34,9 +40,11 @@ def test_record_condition_inserts_row(tmp_db):
 def test_get_active_sites_returns_only_active(tmp_db):
     init_db(tmp_db)
     conn = get_db(tmp_db)
-    conn.execute("INSERT INTO sites (site_number, active) VALUES ('11111111', 1)")
-    conn.execute("INSERT INTO sites (site_number, active) VALUES ('22222222', 0)")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO sites (site_number, active) VALUES ('11111111', 1)")
+    cur.execute("INSERT INTO sites (site_number, active) VALUES ('22222222', 0)")
     conn.commit()
+    cur.close()
     conn.close()
 
     sites = get_active_sites(tmp_db)

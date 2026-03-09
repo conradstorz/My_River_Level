@@ -12,8 +12,10 @@ def client(tmp_db):
 
 def test_subscribers_page_lists_subscribers(client, tmp_db):
     conn = get_db(tmp_db)
-    conn.execute("INSERT INTO subscribers (display_name, channel, channel_id) VALUES ('Alice', 'telegram', '1234')")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO subscribers (display_name, channel, channel_id) VALUES ('Alice', 'telegram', '1234')")
     conn.commit()
+    cur.close()
     conn.close()
     response = client.get("/subscribers")
     assert b"Alice" in response.data
@@ -28,13 +30,18 @@ def test_add_subscriber_post(client):
 
 def test_remove_subscriber(client, tmp_db):
     conn = get_db(tmp_db)
-    conn.execute("INSERT INTO subscribers (id, display_name, channel, channel_id) VALUES (1, 'Alice', 'telegram', '1234')")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO subscribers (id, display_name, channel, channel_id) VALUES (1, 'Alice', 'telegram', '1234')")
     conn.commit()
+    cur.close()
     conn.close()
     response = client.post("/subscribers/1/remove", follow_redirects=True)
     assert response.status_code == 200
     conn = get_db(tmp_db)
-    row = conn.execute("SELECT active FROM subscribers WHERE id=1").fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT active FROM subscribers WHERE id=1")
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     assert row["active"] == 0
 
@@ -54,7 +61,10 @@ def test_add_sms_subscriber_normalizes_phone_to_e164(client, tmp_db):
         "channel_id": "8125577095",  # no country code — root cause of real delivery failure
     }, follow_redirects=True)
     conn = get_db(tmp_db)
-    row = conn.execute("SELECT channel_id FROM subscribers WHERE display_name='Conrad'").fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT channel_id FROM subscribers WHERE display_name='Conrad'")
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     assert row is not None
     assert row["channel_id"] == "+18125577095"
@@ -67,7 +77,10 @@ def test_add_whatsapp_subscriber_normalizes_phone_to_e164(client, tmp_db):
         "channel_id": "8125550001",
     }, follow_redirects=True)
     conn = get_db(tmp_db)
-    row = conn.execute("SELECT channel_id FROM subscribers WHERE display_name='Alice'").fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT channel_id FROM subscribers WHERE display_name='Alice'")
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     assert row is not None
     assert row["channel_id"] == "+18125550001"

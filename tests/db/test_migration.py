@@ -22,7 +22,10 @@ def test_migrate_seeds_sites(tmp_db):
     config = _make_config(sites=["03277200", "03292470"])
     migrate_from_config(config, tmp_db)
     conn = get_db(tmp_db)
-    rows = conn.execute("SELECT site_number FROM sites").fetchall()
+    cur = conn.cursor()
+    cur.execute("SELECT site_number FROM sites")
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     site_numbers = [r["site_number"] for r in rows]
     assert "03277200" in site_numbers
@@ -40,6 +43,9 @@ def test_migrate_skips_duplicate_sites(tmp_db):
     migrate_from_config(config, tmp_db)
     migrate_from_config(config, tmp_db)  # run twice
     conn = get_db(tmp_db)
-    count = conn.execute("SELECT COUNT(*) FROM sites").fetchone()[0]
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS cnt FROM sites")
+    count = cur.fetchone()["cnt"]
+    cur.close()
     conn.close()
     assert count == 1

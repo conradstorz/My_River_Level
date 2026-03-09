@@ -23,12 +23,15 @@ def is_reminder_due(site_id, severity, db_path=None):
         return False
 
     conn = get_db(db_path)
-    row = conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         """SELECT sent_at FROM notifications
-           WHERE site_id = ? AND trigger_type = 'reminder'
+           WHERE site_id = %s AND trigger_type = 'reminder'
            ORDER BY sent_at DESC LIMIT 1""",
         (site_id,)
-    ).fetchone()
+    )
+    row = cur.fetchone()
+    cur.close()
     conn.close()
 
     if row is None:
@@ -43,7 +46,8 @@ def is_reminder_due(site_id, severity, db_path=None):
 def get_current_site_severities(db_path=None):
     """Return list of {site_id, site_number, station_name, severity, current_value, unit, percentile} for all active sites."""
     conn = get_db(db_path)
-    rows = conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         """SELECT s.id AS site_id, s.site_number, s.station_name,
                   sc.severity, sc.current_value, sc.unit, sc.percentile
            FROM sites s
@@ -52,7 +56,9 @@ def get_current_site_severities(db_path=None):
                WHERE site_id = s.id ORDER BY id DESC LIMIT 1
            )
            WHERE s.active = 1"""
-    ).fetchall()
+    )
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     return [dict(r) for r in rows]
 

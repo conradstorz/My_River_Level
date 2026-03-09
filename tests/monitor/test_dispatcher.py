@@ -36,9 +36,11 @@ def test_format_reminder_message():
 def test_dispatcher_calls_adapter_for_each_subscriber(tmp_db):
     init_db(tmp_db)
     conn = get_db(tmp_db)
-    conn.execute("INSERT INTO sites (id, site_number) VALUES (1, '12345678')")
-    conn.execute("INSERT INTO subscribers (channel, channel_id, active) VALUES ('telegram', 'chat1', 1)")
+    cur = conn.cursor()
+    cur.execute("INSERT INTO sites (id, site_number) VALUES (1, '12345678')")
+    cur.execute("INSERT INTO subscribers (channel, channel_id, active) VALUES ('telegram', 'chat1', 1)")
     conn.commit()
+    cur.close()
     conn.close()
 
     mock_adapter = MagicMock()

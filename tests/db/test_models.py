@@ -1,12 +1,16 @@
 import pytest
-import sqlite3
 from db.models import init_db, get_setting, set_setting, get_db
 
 def test_init_db_creates_all_tables(tmp_db):
     init_db(tmp_db)
-    conn = sqlite3.connect(tmp_db)
-    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = {row[0] for row in cursor.fetchall()}
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public'
+    """)
+    tables = {row["table_name"] for row in cur.fetchall()}
+    cur.close()
     conn.close()
     expected = {"sites", "settings", "site_conditions", "subscribers",
                 "notifications", "pending_registrations",
@@ -36,9 +40,13 @@ def test_init_db_seeds_default_settings(tmp_db):
 def test_new_tables_created(tmp_db):
     init_db(tmp_db)
     conn = get_db(tmp_db)
-    tables = {r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()}
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public'
+    """)
+    tables = {row["table_name"] for row in cur.fetchall()}
+    cur.close()
     conn.close()
     assert "user_pages" in tables
     assert "noaa_gauges" in tables
@@ -116,8 +124,10 @@ def test_get_pages_for_noaa_gauge(tmp_db):
     # Disable one page and verify it's excluded
     from db.models import get_db
     conn = get_db(tmp_db)
-    conn.execute("UPDATE user_pages SET active=0 WHERE id=?", (p1["id"],))
+    cur = conn.cursor()
+    cur.execute("UPDATE user_pages SET active=0 WHERE id=%s", (p1["id"],))
     conn.commit()
+    cur.close()
     conn.close()
     active_pages = get_pages_for_noaa_gauge(gid, tmp_db)
     assert len(active_pages) == 1

@@ -41,8 +41,10 @@ def test_view_page_disabled(client):
     db_path = client.application.config["DB_PATH"]
     pub, _ = create_user_page("Disabled", db_path)
     conn = get_db(db_path)
-    conn.execute("UPDATE user_pages SET active=0 WHERE public_token=?", (pub,))
+    cur = conn.cursor()
+    cur.execute("UPDATE user_pages SET active=0 WHERE public_token=%s", (pub,))
     conn.commit()
+    cur.close()
     conn.close()
     resp = client.get(f"/view/{pub}")
     assert resp.status_code == 404
@@ -193,8 +195,10 @@ def test_admin_toggle_page_enables(client):
     page = get_page_by_public_token(pub, db_path)
     # Disable first
     conn = get_db(db_path)
-    conn.execute("UPDATE user_pages SET active=0 WHERE id=?", (page["id"],))
+    cur = conn.cursor()
+    cur.execute("UPDATE user_pages SET active=0 WHERE id=%s", (page["id"],))
     conn.commit()
+    cur.close()
     conn.close()
     # Toggle back to active
     resp = client.post(f"/admin/pages/{page['id']}/toggle", follow_redirects=True)
@@ -215,9 +219,12 @@ def test_twilio_pause_page_subscriber(client):
                        data={"From": "+15025551234", "Body": "PAUSE", "To": "+18005550000"})
     assert resp.status_code == 200
     conn = get_db(db_path)
-    row = conn.execute(
-        "SELECT status FROM page_subscribers WHERE channel_id=?", ("+15025551234",)
-    ).fetchone()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT status FROM page_subscribers WHERE channel_id=%s", ("+15025551234",)
+    )
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     assert row["status"] == "paused"
 
@@ -235,9 +242,12 @@ def test_twilio_resume_page_subscriber(client):
                        data={"From": "+15025551234", "Body": "RESUME", "To": "+18005550000"})
     assert resp.status_code == 200
     conn = get_db(db_path)
-    row = conn.execute(
-        "SELECT status FROM page_subscribers WHERE channel_id=?", ("+15025551234",)
-    ).fetchone()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT status FROM page_subscribers WHERE channel_id=%s", ("+15025551234",)
+    )
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     assert row["status"] == "active"
 
@@ -254,8 +264,11 @@ def test_twilio_stop_also_updates_page_subscribers(client):
                        data={"From": "+15025551234", "Body": "STOP", "To": "+18005550000"})
     assert resp.status_code == 200
     conn = get_db(db_path)
-    row = conn.execute(
-        "SELECT status FROM page_subscribers WHERE channel_id=?", ("+15025551234",)
-    ).fetchone()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT status FROM page_subscribers WHERE channel_id=%s", ("+15025551234",)
+    )
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     assert row["status"] == "unsubscribed"

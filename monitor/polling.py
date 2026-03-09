@@ -15,32 +15,40 @@ logger = logging.getLogger(__name__)
 
 def get_active_sites(db_path=None):
     conn = get_db(db_path)
-    rows = conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         "SELECT id, site_number, station_name, parameter_code FROM sites WHERE active=1"
-    ).fetchall()
+    )
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     return [dict(r) for r in rows]
 
 
 def get_previous_severity(site_id, db_path=None):
     conn = get_db(db_path)
-    row = conn.execute(
-        "SELECT severity FROM site_conditions WHERE site_id=? ORDER BY id DESC LIMIT 1",
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT severity FROM site_conditions WHERE site_id=%s ORDER BY id DESC LIMIT 1",
         (site_id,)
-    ).fetchone()
+    )
+    row = cur.fetchone()
+    cur.close()
     conn.close()
     return row["severity"] if row else None
 
 
 def record_condition(site_id, current_value, unit, percentile, severity, db_path=None):
     conn = get_db(db_path)
-    conn.execute(
+    cur = conn.cursor()
+    cur.execute(
         """INSERT INTO site_conditions
            (site_id, current_value, unit, percentile, severity)
-           VALUES (?, ?, ?, ?, ?)""",
+           VALUES (%s, %s, %s, %s, %s)""",
         (site_id, current_value, unit, percentile, severity)
     )
     conn.commit()
+    cur.close()
     conn.close()
 
 

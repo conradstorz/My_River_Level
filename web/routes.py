@@ -35,7 +35,8 @@ def register_routes(app):
     def dashboard():
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
-        sites = conn.execute("""
+        cur = conn.cursor()
+        cur.execute("""
             SELECT s.site_number, s.station_name, sc.current_value, sc.unit,
                    sc.percentile, sc.severity, sc.checked_at
             FROM sites s
@@ -44,14 +45,17 @@ def register_routes(app):
             )
             WHERE s.active = 1
             ORDER BY s.station_name
-        """).fetchall()
-        recent_notifications = conn.execute("""
+        """)
+        sites = cur.fetchall()
+        cur.execute("""
             SELECT n.sent_at, n.channel, n.message_text, n.trigger_type, n.success,
                    s.station_name
             FROM notifications n
             LEFT JOIN sites s ON s.id = n.site_id
             ORDER BY n.sent_at DESC LIMIT 20
-        """).fetchall()
+        """)
+        recent_notifications = cur.fetchall()
+        cur.close()
         conn.close()
         return render_template(
             "dashboard.html",
@@ -65,7 +69,10 @@ def register_routes(app):
     def subscribers():
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
-        subs = conn.execute("SELECT * FROM subscribers ORDER BY opted_in_at DESC").fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM subscribers ORDER BY opted_in_at DESC")
+        subs = cur.fetchall()
+        cur.close()
         conn.close()
         return render_template("subscribers.html", subscribers=subs)
 
@@ -79,11 +86,16 @@ def register_routes(app):
             if channel in ("sms", "whatsapp"):
                 channel_id = normalize_e164(channel_id)
             conn = get_db(db_path)
-            conn.execute(
-                "INSERT OR REPLACE INTO subscribers (display_name, channel, channel_id, active) VALUES (?,?,?,1)",
+            cur = conn.cursor()
+            cur.execute(
+                """INSERT INTO subscribers (display_name, channel, channel_id, active)
+                   VALUES (%s, %s, %s, 1)
+                   ON CONFLICT (channel, channel_id)
+                   DO UPDATE SET display_name = EXCLUDED.display_name, active = 1""",
                 (display_name, channel, channel_id)
             )
             conn.commit()
+            cur.close()
             conn.close()
             flash("Subscriber added.", "success")
         else:
@@ -94,8 +106,10 @@ def register_routes(app):
     def remove_subscriber(sub_id):
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
-        conn.execute("UPDATE subscribers SET active=0 WHERE id=?", (sub_id,))
+        cur = conn.cursor()
+        cur.execute("UPDATE subscribers SET active=0 WHERE id=%s", (sub_id,))
         conn.commit()
+        cur.close()
         conn.close()
         flash("Subscriber removed.", "success")
         return redirect(url_for("subscribers"))
@@ -110,39 +124,44 @@ def register_routes(app):
         channel = "whatsapp" if wa_number and wa_number in to_number else "sms"
         clean_from = from_number.replace("whatsapp:", "")
         conn = get_db(db_path)
+        cur = conn.cursor()
         if body == "JOIN":
-            conn.execute(
-                "INSERT OR REPLACE INTO subscribers (display_name, channel, channel_id, active) VALUES (?,?,?,1)",
+            cur.execute(
+                """INSERT INTO subscribers (display_name, channel, channel_id, active)
+                   VALUES (%s, %s, %s, 1)
+                   ON CONFLICT (channel, channel_id)
+                   DO UPDATE SET active = 1""",
                 (clean_from, channel, clean_from)
             )
             conn.commit()
         elif body in ("STOP", "UNSUBSCRIBE"):
-            conn.execute(
-                "UPDATE subscribers SET active=0 WHERE channel=? AND channel_id=?",
+            cur.execute(
+                "UPDATE subscribers SET active=0 WHERE channel=%s AND channel_id=%s",
                 (channel, clean_from)
             )
             conn.commit()
         # Page subscriber self-service
         if body == "PAUSE":
-            conn.execute(
-                "UPDATE page_subscribers SET status='paused' WHERE channel=? AND channel_id=?",
+            cur.execute(
+                "UPDATE page_subscribers SET status='paused' WHERE channel=%s AND channel_id=%s",
                 (channel, clean_from)
             )
             conn.commit()
         elif body == "RESUME":
-            conn.execute(
-                "UPDATE page_subscribers SET status='active' WHERE channel=? AND channel_id=?",
+            cur.execute(
+                "UPDATE page_subscribers SET status='active' WHERE channel=%s AND channel_id=%s",
                 (channel, clean_from)
             )
             conn.commit()
         # Also update page_subscribers — both tables must be updated independently
         # since page_subscribers.id is not the same as subscribers.id
         elif body in ("STOP", "UNSUBSCRIBE"):
-            conn.execute(
-                "UPDATE page_subscribers SET status='unsubscribed' WHERE channel=? AND channel_id=?",
+            cur.execute(
+                "UPDATE page_subscribers SET status='unsubscribed' WHERE channel=%s AND channel_id=%s",
                 (channel, clean_from)
             )
             conn.commit()
+        cur.close()
         conn.close()
         return '<?xml version="1.0" encoding="UTF-8"?><Response></Response>', 200, {"Content-Type": "text/xml"}
 
@@ -194,11 +213,16 @@ def register_routes(app):
                 text = event.get("message", {}).get("text", "").strip().upper()
                 if psid and text == "JOIN":
                     conn = get_db(db_path)
-                    conn.execute(
-                        "INSERT OR REPLACE INTO subscribers (display_name, channel, channel_id, active) VALUES (?,?,?,1)",
+                    cur = conn.cursor()
+                    cur.execute(
+                        """INSERT INTO subscribers (display_name, channel, channel_id, active)
+                           VALUES (%s, %s, %s, 1)
+                           ON CONFLICT (channel, channel_id)
+                           DO UPDATE SET active = 1""",
                         (psid, "facebook", psid)
                     )
                     conn.commit()
+                    cur.close()
                     conn.close()
         return "OK", 200
 
@@ -206,7 +230,10 @@ def register_routes(app):
     def sites():
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
-        all_sites = conn.execute("SELECT * FROM sites ORDER BY station_name").fetchall()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sites ORDER BY station_name")
+        all_sites = cur.fetchall()
+        cur.close()
         conn.close()
         return render_template("sites.html", sites=all_sites)
 
@@ -225,11 +252,15 @@ def register_routes(app):
             return redirect(url_for("sites"))
 
         conn = get_db(db_path)
-        conn.execute(
-            "INSERT OR IGNORE INTO sites (site_number, station_name, parameter_code) VALUES (?,?,?)",
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO sites (site_number, station_name, parameter_code)
+               VALUES (%s, %s, %s)
+               ON CONFLICT (site_number) DO NOTHING""",
             (site_number, usgs_name, param_code)
         )
         conn.commit()
+        cur.close()
         conn.close()
         flash(f"Site {site_number} ({usgs_name}) added.", "success")
         return redirect(url_for("sites"))
@@ -238,8 +269,10 @@ def register_routes(app):
     def toggle_site(site_id):
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
-        conn.execute("UPDATE sites SET active = 1 - active WHERE id=?", (site_id,))
+        cur = conn.cursor()
+        cur.execute("UPDATE sites SET active = 1 - active WHERE id=%s", (site_id,))
         conn.commit()
+        cur.close()
         conn.close()
         return redirect(url_for("sites"))
 
@@ -247,8 +280,10 @@ def register_routes(app):
     def remove_site(site_id):
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
-        conn.execute("DELETE FROM sites WHERE id=?", (site_id,))
+        cur = conn.cursor()
+        cur.execute("DELETE FROM sites WHERE id=%s", (site_id,))
         conn.commit()
+        cur.close()
         conn.close()
         flash("Site removed.", "success")
         return redirect(url_for("sites"))
@@ -385,7 +420,8 @@ def register_routes(app):
     def admin_pages():
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
-        pages = conn.execute("""
+        cur = conn.cursor()
+        cur.execute("""
             SELECT up.*,
                    COUNT(DISTINCT png.noaa_gauge_id) AS gauge_count,
                    COUNT(DISTINCT ps.id) AS subscriber_count
@@ -394,7 +430,9 @@ def register_routes(app):
             LEFT JOIN page_subscribers ps ON ps.page_id = up.id AND ps.status='active'
             GROUP BY up.id
             ORDER BY up.created_at DESC
-        """).fetchall()
+        """)
+        pages = cur.fetchall()
+        cur.close()
         conn.close()
         return render_template("admin_pages.html", pages=pages)
 
@@ -402,8 +440,10 @@ def register_routes(app):
     def admin_toggle_page(page_id):
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
-        conn.execute("UPDATE user_pages SET active = 1 - active WHERE id=?", (page_id,))
+        cur = conn.cursor()
+        cur.execute("UPDATE user_pages SET active = 1 - active WHERE id=%s", (page_id,))
         conn.commit()
+        cur.close()
         conn.close()
         flash("Page status updated.", "success")
         return redirect(url_for("admin_pages"))
