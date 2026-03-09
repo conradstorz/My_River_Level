@@ -45,3 +45,6 @@ Thumbs.db
 # Runtime files containing PII (subscriber data, logs)
 db/river_monitor.db
 logs/
+
+# Environment variables (never commit real credentials)
+.env
