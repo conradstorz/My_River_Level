@@ -11,12 +11,8 @@ requests
 # Visualization (optional)
 matplotlib
 
-# Interactive setup
-colorama
-rich
-
-# Windows Service
-pywin32
+# Database
+psycopg2-binary
 
 # Web portal
 flask
