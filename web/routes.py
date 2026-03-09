@@ -155,7 +155,7 @@ def register_routes(app):
             conn.commit()
         # Also update page_subscribers — both tables must be updated independently
         # since page_subscribers.id is not the same as subscribers.id
-        elif body in ("STOP", "UNSUBSCRIBE"):
+        if body in ("STOP", "UNSUBSCRIBE"):
             cur.execute(
                 "UPDATE page_subscribers SET status='unsubscribed' WHERE channel=%s AND channel_id=%s",
                 (channel, clean_from)

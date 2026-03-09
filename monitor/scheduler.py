@@ -24,22 +24,26 @@ def is_reminder_due(site_id, severity, db_path=None):
 
     conn = get_db(db_path)
     cur = conn.cursor()
-    cur.execute(
-        """SELECT sent_at FROM notifications
-           WHERE site_id = %s AND trigger_type = 'reminder'
-           ORDER BY sent_at DESC LIMIT 1""",
-        (site_id,)
-    )
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            """SELECT sent_at FROM notifications
+               WHERE site_id = %s AND trigger_type = 'reminder'
+               ORDER BY sent_at DESC LIMIT 1""",
+            (site_id,)
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
 
     if row is None:
         return True
 
     last_sent_str = row["sent_at"]
-    # SQLite datetime('now') returns UTC without timezone suffix — parse as UTC
-    last_sent = datetime.fromisoformat(last_sent_str).replace(tzinfo=timezone.utc)
+    # PostgreSQL NOW()::TEXT returns a UTC timestamp; fromisoformat() handles
+    # both naive strings and offset suffixes like "+00" (Python 3.11+).
+    parsed = datetime.fromisoformat(last_sent_str)
+    last_sent = parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc) - last_sent >= timedelta(hours=interval_hours)
 
 
@@ -47,19 +51,21 @@ def get_current_site_severities(db_path=None):
     """Return list of {site_id, site_number, station_name, severity, current_value, unit, percentile} for all active sites."""
     conn = get_db(db_path)
     cur = conn.cursor()
-    cur.execute(
-        """SELECT s.id AS site_id, s.site_number, s.station_name,
-                  sc.severity, sc.current_value, sc.unit, sc.percentile
-           FROM sites s
-           JOIN site_conditions sc ON sc.id = (
-               SELECT id FROM site_conditions
-               WHERE site_id = s.id ORDER BY id DESC LIMIT 1
-           )
-           WHERE s.active = 1"""
-    )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            """SELECT s.id AS site_id, s.site_number, s.station_name,
+                      sc.severity, sc.current_value, sc.unit, sc.percentile
+               FROM sites s
+               JOIN site_conditions sc ON sc.id = (
+                   SELECT id FROM site_conditions
+                   WHERE site_id = s.id ORDER BY id DESC LIMIT 1
+               )
+               WHERE s.active = 1"""
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
     return [dict(r) for r in rows]
 
 

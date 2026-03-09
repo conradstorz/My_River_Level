@@ -16,40 +16,46 @@ logger = logging.getLogger(__name__)
 def get_active_sites(db_path=None):
     conn = get_db(db_path)
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id, site_number, station_name, parameter_code FROM sites WHERE active=1"
-    )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            "SELECT id, site_number, station_name, parameter_code FROM sites WHERE active=1"
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
     return [dict(r) for r in rows]
 
 
 def get_previous_severity(site_id, db_path=None):
     conn = get_db(db_path)
     cur = conn.cursor()
-    cur.execute(
-        "SELECT severity FROM site_conditions WHERE site_id=%s ORDER BY id DESC LIMIT 1",
-        (site_id,)
-    )
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            "SELECT severity FROM site_conditions WHERE site_id=%s ORDER BY id DESC LIMIT 1",
+            (site_id,)
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
     return row["severity"] if row else None
 
 
 def record_condition(site_id, current_value, unit, percentile, severity, db_path=None):
     conn = get_db(db_path)
     cur = conn.cursor()
-    cur.execute(
-        """INSERT INTO site_conditions
-           (site_id, current_value, unit, percentile, severity)
-           VALUES (%s, %s, %s, %s, %s)""",
-        (site_id, current_value, unit, percentile, severity)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            """INSERT INTO site_conditions
+               (site_id, current_value, unit, percentile, severity)
+               VALUES (%s, %s, %s, %s, %s)""",
+            (site_id, current_value, unit, percentile, severity)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
 
 def detect_transition(previous_severity, new_severity):

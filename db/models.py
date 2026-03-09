@@ -131,25 +131,29 @@ def init_db(db_path=None):
     """Create all tables and seed default settings."""
     conn = get_conn(db_path)
     cur = conn.cursor()
-    for stmt in SCHEMA_STATEMENTS:
-        cur.execute(stmt)
-    for key, value in DEFAULT_SETTINGS.items():
-        cur.execute(
-            "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
-            (key, value)
-        )
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        for stmt in SCHEMA_STATEMENTS:
+            cur.execute(stmt)
+        for key, value in DEFAULT_SETTINGS.items():
+            cur.execute(
+                "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING",
+                (key, value)
+            )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
 
 def get_setting(key, db_path=None, default=None):
     conn = get_conn(db_path)
     cur = conn.cursor()
-    cur.execute("SELECT value FROM settings WHERE key = %s", (key,))
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute("SELECT value FROM settings WHERE key = %s", (key,))
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
     if row is None:
         return default
     return row["value"]
@@ -158,13 +162,15 @@ def get_setting(key, db_path=None, default=None):
 def set_setting(key, value, db_path=None):
     conn = get_conn(db_path)
     cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-        (key, str(value))
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            "INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+            (key, str(value))
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
 
 def create_user_page(page_name, db_path=None):

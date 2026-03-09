@@ -37,27 +37,31 @@ def format_noaa_transition_message(data):
 def get_active_subscribers(db_path=None):
     conn = get_db(db_path)
     cur = conn.cursor()
-    cur.execute(
-        "SELECT id, channel, channel_id FROM subscribers WHERE active=1"
-    )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            "SELECT id, channel, channel_id FROM subscribers WHERE active=1"
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
     return [dict(r) for r in rows]
 
 
 def log_notification(subscriber_id, site_id, channel, message, trigger_type, success, error_msg="", db_path=None):
     conn = get_db(db_path)
     cur = conn.cursor()
-    cur.execute(
-        """INSERT INTO notifications
-           (subscriber_id, site_id, channel, message_text, trigger_type, success, error_msg)
-           VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-        (subscriber_id, site_id, channel, message, trigger_type, 1 if success else 0, error_msg)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    try:
+        cur.execute(
+            """INSERT INTO notifications
+               (subscriber_id, site_id, channel, message_text, trigger_type, success, error_msg)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (subscriber_id, site_id, channel, message, trigger_type, 1 if success else 0, error_msg)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
 
 class NotificationDispatcher(threading.Thread):
