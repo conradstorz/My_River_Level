@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    ports:
+      - "5743:5743"
+    environment:
+      - DATABASE_URL=postgresql://river:river@db:5432/rivermonitor
+      - FLASK_SECRET_KEY=change-me-in-production
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: river
+      POSTGRES_PASSWORD: river
+      POSTGRES_DB: rivermonitor
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U river -d rivermonitor"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
