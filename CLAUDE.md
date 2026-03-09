@@ -5,40 +5,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Activate virtual environment (Windows)
-venv\Scripts\activate
-
-# Install dependencies
+# Install dependencies (for local development / running tests)
 pip install -r requirements.txt
 
-# Run tests
+# Run tests (requires PostgreSQL — see .env.example for TEST_DATABASE_URL)
 pytest
 
 # Run a specific test file
 pytest tests/monitor/test_polling.py
 
-# Run the service (development/debug mode — no Windows service manager needed)
-python service.py debug
+# Run locally with Docker (recommended)
+docker compose up --build
 
-# Run the standalone CLI monitor (legacy, does not use the database)
-python river_monitor.py
-python river_monitor.py --config Bushmans
-python river_monitor.py --list-configs
-
-# Run interactive setup wizard (finds and adds USGS gauges)
-python setup_wizard.py
-
-# Create a Windows desktop shortcut/launcher
-python create_shortcut.py
+# Stop
+docker compose down
 ```
 
-## Service Commands (run as Administrator)
+## Production deployment
+
+Build and push to GitHub Container Registry:
 
 ```bash
-python service.py install
-python service.py start
-python service.py stop
-python service.py remove
+docker build -t ghcr.io/<your-org>/river-monitor:latest .
+docker push ghcr.io/<your-org>/river-monitor:latest
+```
+
+On the server:
+```bash
+docker compose pull
+docker compose up -d
 ```
 
 The service runs on `http://localhost:5743`. Logs go to `logs/river_monitor.log` (rotating, 5 MB, 3 backups).
@@ -49,7 +44,7 @@ Never chain or pipe bash commands. Run one command at a time. Do not use `&&`, `
 
 ## Architecture
 
-The primary entry point is `service.py`, which starts three daemon threads sharing a single `notification_queue`:
+The primary entry point is `main.py`, which starts three daemon threads sharing a single `notification_queue`:
 
 1. **Polling thread** (`monitor/polling.py`) — fetches USGS data on a configurable interval and enqueues notifications when thresholds are crossed.
 2. **Scheduler thread** (`monitor/scheduler.py`) — enforces reminder intervals so alerts aren't sent too frequently for persistent conditions.
@@ -59,7 +54,9 @@ The primary entry point is `service.py`, which starts three daemon threads shari
 ### Module layout
 
 ```
-service.py              — Windows service entry point; starts all threads
+main.py                 — Entry point; starts all threads
+Dockerfile              — Container image definition
+docker-compose.yml      — Multi-container orchestration (app + PostgreSQL)
 monitor/
   polling.py            — USGS data fetch loop; uses dataretrieval nwis.get_iv / get_dv
   scheduler.py          — Throttles repeat alerts; tracks last-notified timestamps
@@ -75,15 +72,10 @@ web/
   app.py                — Flask app factory
   routes.py             — Dashboard, Sites, Subscribers, Settings, Broadcast, webhooks
 db/
-  models.py             — SQLite schema, init, and all DB helper functions
-  migration.py          — One-time import of legacy config.py into the database
-river_monitor.py        — Standalone CLI monitor (original script, no DB dependency)
-setup_wizard.py         — Interactive CLI: geocodes address, finds nearby gauges, writes DB
-launch.py               — Desktop launcher: opens portal or starts service as needed
-create_shortcut.py      — Creates a Windows .lnk shortcut to launch.py
+  models.py             — PostgreSQL schema, init, and all DB helper functions
 tests/
   conftest.py           — Shared pytest fixtures (tmp_db)
-  db/                   — Tests for models and migration
+  db/                   — Tests for models
   monitor/              — Tests for polling, scheduling, dispatching, phone utils, site validation
   web/                  — Tests for all Flask routes
 ```
@@ -98,7 +90,7 @@ tests/
 
 ### Configuration and database
 
-All runtime settings are stored in `db/river_monitor.db` (SQLite). There are no config files at runtime — the legacy `config.py` module format is only used by `river_monitor.py` and by the one-time migration in `db/migration.py`.
+All runtime settings are stored in PostgreSQL (connection via `DATABASE_URL` env var). There are no config files at runtime.
 
 Key settings stored in the DB: `poll_interval_minutes`, `low_percentile`, `high_percentile`, `very_low_percentile`, `very_high_percentile`, `reminder_low_high_hours`, `reminder_severe_hours`, `historical_start_year`, `search_radius_miles`, and per-channel credentials (Telegram token, Twilio SID/token/numbers, Facebook tokens).
 
