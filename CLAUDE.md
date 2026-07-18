@@ -8,11 +8,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies (for local development / running tests)
 pip install -r requirements.txt
 
-# Run tests (requires PostgreSQL — see .env.example for TEST_DATABASE_URL)
+# Run tests against a local PostgreSQL (see .env.example for TEST_DATABASE_URL)
 pytest
 
 # Run a specific test file
 pytest tests/monitor/test_polling.py
+
+# Run the full test suite in Docker — works even when the Docker daemon is
+# remote (separate from the CLI machine). Starts the db service, builds a test
+# image that includes tests/, and runs pytest inside the Docker network. The
+# test database is created automatically by tests/conftest.py.
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm test
 
 # Run locally with Docker (recommended)
 docker compose up --build

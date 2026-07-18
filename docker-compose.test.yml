@@ -1,0 +1,19 @@
+# Test overlay — runs the suite inside the Docker network against the `db`
+# service. Works even when the Docker daemon is remote (separate from the
+# machine running the CLI): no ports are relied upon and no host paths are
+# bind-mounted.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm test
+#
+# The test database is created automatically by tests/conftest.py.
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      - TEST_DATABASE_URL=postgresql://river:river@db:5432/river_test
+    depends_on:
+      db:
+        condition: service_healthy

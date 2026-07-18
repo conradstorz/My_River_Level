@@ -1,0 +1,14 @@
+# Test image: same runtime as the app, but includes the tests/ directory
+# (the production .dockerignore excludes tests/). Used by the `test` service
+# in docker-compose.test.yml so the suite runs entirely inside the Docker
+# network — no host-side DB access or bind mounts required.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["pytest", "-q"]

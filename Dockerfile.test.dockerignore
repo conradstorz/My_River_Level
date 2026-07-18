@@ -1,0 +1,27 @@
+# Per-Dockerfile ignore for Dockerfile.test (BuildKit uses this instead of
+# .dockerignore for that build). Same exclusions as .dockerignore EXCEPT
+# tests/, which must be included so the suite can run.
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+
+# Logs
+logs/
+
+# Database files
+*.db
+
+# Git
+.git/
+.gitignore
+
+# Development
+docs/
+.worktrees/
+
+# Environment
+.env
