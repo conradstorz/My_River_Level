@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc 3.10" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>docker-ssh-access</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: 1.5em;}
+    div.column{flex: auto;}
+    @media screen {
+    div.columns{gap: min(4vw, 1.5em);}
+    div.column{overflow-x: auto;}
+    }
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+    /* CSS for syntax highlighting */
+    html { -webkit-text-size-adjust: 100%; }
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { color: #008000; } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { color: #008000; font-weight: bold; } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+  </style>
+  <link rel="stylesheet" href="C:\Users\Conrad\AppData\Local\Temp\markdown-print-style.css" />
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">docker-ssh-access</h1>
+</header>
+<h1 id="managing-the-docker-server-over-ssh">Managing the Docker Server
+over SSH</h1>
+<p>This guide lets other PCs on your LAN manage containers on the home
+server using their own local <code>docker</code> CLI, tunneled over SSH.
+Nothing new is exposed on the network — you reuse SSH, which is already
+encrypted and key-authenticated.</p>
+<blockquote>
+<p>⚠️ <strong>Docker access is root-equivalent.</strong> Anyone who can
+run <code>docker</code> on the server can take over the whole machine.
+Only grant this to people you trust with root. See <a
+href="#security-notes">Security notes</a>.</p>
+</blockquote>
+<hr />
+<h2 id="overview">Overview</h2>
+<pre><code>┌──────────────┐         SSH (port 22)        ┌────────────────────┐
+│  Client PC   │  docker context: homeserver  │   Home Server      │
+│  docker CLI  │ ───────────────────────────► │   Docker daemon    │
+└──────────────┘                              └────────────────────┘</code></pre>
+<p>Each client keeps its own <code>docker</code> CLI but points it at
+the server with a <strong>Docker context</strong>. Commands like
+<code>docker ps</code>, <code>docker run</code>, and
+<code>docker compose up</code> then execute on the server.</p>
+<hr />
+<h2 id="part-1-server-setup-do-once">Part 1 — Server setup (do
+once)</h2>
+<p>Run these on the <strong>home server</strong>.</p>
+<h3 id="confirm-ssh-is-running">1. Confirm SSH is running</h3>
+<div class="sourceCode" id="cb2"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl status ssh</span></code></pre></div>
+<p>If it’s not installed:</p>
+<div class="sourceCode" id="cb3"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt update</span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> apt install <span class="at">-y</span> openssh-server</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> systemctl enable <span class="at">--now</span> ssh</span></code></pre></div>
+<p>Find the server’s LAN IP (note it for later):</p>
+<div class="sourceCode" id="cb4"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">ip</span> <span class="at">-4</span> addr show <span class="kw">|</span> <span class="fu">grep</span> inet</span></code></pre></div>
+<h3 id="create-an-account-for-each-user">2. Create an account for each
+user</h3>
+<div class="sourceCode" id="cb5"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> adduser alice</span></code></pre></div>
+<p>Repeat for each person who needs access.</p>
+<h3 id="add-each-user-to-the-docker-group">3. Add each user to the
+<code>docker</code> group</h3>
+<p>This lets them use Docker without <code>sudo</code>.</p>
+<div class="sourceCode" id="cb6"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> usermod <span class="at">-aG</span> docker alice</span></code></pre></div>
+<p>Group membership takes effect on their <strong>next
+login</strong>.</p>
+<h3 id="verify-docker-works-for-that-user">4. Verify Docker works for
+that user</h3>
+<p>Have the user log in and run:</p>
+<div class="sourceCode" id="cb7"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> ps</span></code></pre></div>
+<p>If it prints a (possibly empty) container table with no permission
+error, the group is applied correctly.</p>
+<hr />
+<h2 id="part-2-ssh-key-setup-per-user">Part 2 — SSH key setup (per
+user)</h2>
+<p>Password SSH works, but keys are more secure and avoid retyping
+passwords.</p>
+<h3 id="on-the-client-pc">On the client PC</h3>
+<p>Generate a key if the user doesn’t already have one:</p>
+<div class="sourceCode" id="cb8"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ssh-keygen</span> <span class="at">-t</span> ed25519 <span class="at">-C</span> <span class="st">&quot;alice@client-pc&quot;</span></span></code></pre></div>
+<p>Copy the public key to the server:</p>
+<div class="sourceCode" id="cb9"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Linux/macOS/Git Bash</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a><span class="ex">ssh-copy-id</span> alice@<span class="op">&lt;</span>SERVER-IP<span class="op">&gt;</span></span></code></pre></div>
+<p>On Windows PowerShell (no <code>ssh-copy-id</code>):</p>
+<div class="sourceCode" id="cb10"><pre
+class="sourceCode powershell"><code class="sourceCode powershell"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="fu">type</span> <span class="va">$env</span><span class="op">:</span><span class="va">USERPROFILE</span>\<span class="op">.</span><span class="fu">ssh</span>\id_ed25519<span class="op">.</span><span class="fu">pub</span> <span class="op">|</span> ssh alice@<span class="op">&lt;</span>SERVER-IP<span class="op">&gt;</span> <span class="st">&quot;mkdir -p ~/.ssh; cat &gt;&gt; ~/.ssh/authorized_keys&quot;</span></span></code></pre></div>
+<p>Test the login:</p>
+<div class="sourceCode" id="cb11"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="fu">ssh</span> alice@<span class="op">&lt;</span>SERVER-IP<span class="op">&gt;</span></span></code></pre></div>
+<p>You should get a shell without a password prompt.</p>
+<hr />
+<h2 id="part-3-create-the-docker-context-per-client-pc">Part 3 — Create
+the Docker context (per client PC)</h2>
+<p>On each <strong>client PC</strong>, create a context pointing at the
+server:</p>
+<div class="sourceCode" id="cb12"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context create homeserver <span class="at">--docker</span> <span class="st">&quot;host=ssh://alice@&lt;SERVER-IP&gt;&quot;</span></span></code></pre></div>
+<p>Switch to it:</p>
+<div class="sourceCode" id="cb13"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context use homeserver</span></code></pre></div>
+<p>Verify it’s talking to the server:</p>
+<div class="sourceCode" id="cb14"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> info</span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> ps</span></code></pre></div>
+<p><code>docker info</code> should show the server’s hostname and its
+running containers.</p>
+<h3 id="switching-back-and-forth">Switching back and forth</h3>
+<div class="sourceCode" id="cb15"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context ls              <span class="co"># list contexts (* marks the active one)</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context use default     <span class="co"># back to the local Docker</span></span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context use homeserver  <span class="co"># back to the server</span></span></code></pre></div>
+<p>You can also target the server for a single command without
+switching:</p>
+<div class="sourceCode" id="cb16"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> <span class="at">--context</span> homeserver ps</span></code></pre></div>
+<hr />
+<h2 id="part-4-everyday-use">Part 4 — Everyday use</h2>
+<p>Once the context is active, all normal Docker commands run on the
+server:</p>
+<div class="sourceCode" id="cb17"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> run <span class="at">-d</span> <span class="at">--name</span> whoami <span class="at">-p</span> 8080:8080 traefik/whoami</span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> ps</span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> logs whoami</span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> stop whoami <span class="kw">&amp;&amp;</span> <span class="ex">docker</span> rm whoami</span></code></pre></div>
+<h3 id="using-compose">Using Compose</h3>
+<p><code>docker compose</code> respects the active context too. Put a
+<code>compose.yaml</code> on your client PC and bring it up on the
+server:</p>
+<div class="sourceCode" id="cb18"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context use homeserver</span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> compose up <span class="at">-d</span></span></code></pre></div>
+<blockquote>
+<p><strong>Bind mounts caveat:</strong> paths in <code>volumes:</code>
+and <code>-v</code> resolve on the <strong>server</strong>, not your
+client PC. <code>-v ./data:/data</code> refers to a directory on the
+server. To ship files from your machine, bake them into the image or use
+named volumes.</p>
+</blockquote>
+<hr />
+<h2 id="part-5-faster-connections-with-.sshconfig-optional">Part 5 —
+Faster connections with <code>~/.ssh/config</code> (optional)</h2>
+<p>Every Docker command over SSH opens a new connection. With
+<strong>connection multiplexing</strong>, the first connection stays
+open and later commands reuse it — noticeably snappier, and you can use
+a short alias instead of <code>user@ip</code>.</p>
+<p>On the <strong>client PC</strong>, edit (or create)
+<code>~/.ssh/config</code>:</p>
+<pre><code>Host homeserver
+    HostName 192.168.1.50        # your server&#39;s LAN IP
+    User alice
+    IdentityFile ~/.ssh/id_ed25519
+
+    # Reuse one connection for many commands
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%r@%h:%p
+    ControlPersist 10m
+
+    # Keep the connection alive
+    ServerAliveInterval 30
+    ServerAliveCountInterval 3</code></pre>
+<blockquote>
+<p>On Windows, the file lives at
+<code>C:\Users\&lt;you&gt;\.ssh\config</code>. The
+<code>ControlMaster</code>/<code>ControlPath</code> multiplexing options
+are <strong>not supported by Windows’ built-in OpenSSH</strong> — keep
+the <code>Host</code>/<code>HostName</code>/<code>User</code> alias
+(that part works everywhere) and drop the three <code>Control*</code>
+lines there. Multiplexing works from Git Bash, WSL, Linux, and
+macOS.</p>
+</blockquote>
+<p>With the alias defined, you can now:</p>
+<div class="sourceCode" id="cb20"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Plain SSH uses the alias</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a><span class="fu">ssh</span> homeserver</span>
+<span id="cb20-3"><a href="#cb20-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb20-4"><a href="#cb20-4" aria-hidden="true" tabindex="-1"></a><span class="co"># And so does the Docker context — reference the alias instead of user@ip</span></span>
+<span id="cb20-5"><a href="#cb20-5" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context create homeserver <span class="at">--docker</span> <span class="st">&quot;host=ssh://homeserver&quot;</span></span>
+<span id="cb20-6"><a href="#cb20-6" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context use homeserver</span></code></pre></div>
+<p>Create the <code>ControlPath</code> directory once if needed:</p>
+<div class="sourceCode" id="cb21"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> ~/.ssh</span></code></pre></div>
+<hr />
+<h2 id="part-6-portainer-a-web-ui-with-per-user-access-control">Part 6 —
+Portainer: a web UI with per-user access control</h2>
+<p>If some users aren’t comfortable on the command line — or you want to
+<strong>limit who can touch which containers</strong> — run <a
+href="https://www.portainer.io/">Portainer</a>. It’s a web dashboard for
+containers, stacks, images, volumes, and networks, with real
+team/role-based access control that plain Docker can’t provide.</p>
+<h3 id="install-run-on-the-server">Install (run on the server)</h3>
+<div class="sourceCode" id="cb22"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> volume create portainer_data</span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> run <span class="at">-d</span> <span class="dt">\</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">--name</span> portainer <span class="dt">\</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">--restart</span><span class="op">=</span>always <span class="dt">\</span></span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">-p</span> 9443:9443 <span class="dt">\</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">-v</span> /var/run/docker.sock:/var/run/docker.sock <span class="dt">\</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">-v</span> portainer_data:/data <span class="dt">\</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>  portainer/portainer-ce:latest</span></code></pre></div>
+<h3 id="first-time-setup">First-time setup</h3>
+<ol type="1">
+<li>Browse to <code>https://&lt;SERVER-IP&gt;:9443</code> from any PC on
+the LAN.</li>
+<li>Accept the self-signed certificate warning (it’s your own
+server).</li>
+<li>Create the <strong>admin</strong> account (do this promptly — the
+setup window closes for security after a few minutes; if it locks,
+restart the container to reopen it:
+<code>docker restart portainer</code>).</li>
+<li>Choose <strong>“Get Started”</strong> to manage the local Docker
+environment.</li>
+</ol>
+<h3 id="give-other-users-scoped-access">Give other users scoped
+access</h3>
+<ol type="1">
+<li>In Portainer: <strong>Settings → Users → Add user</strong> — create
+a login for each person.</li>
+<li>Optionally group them under <strong>Settings → Teams</strong>.</li>
+<li>Use <strong>environment access control</strong> and
+<strong>resource-level access</strong> to restrict a user or team to
+specific stacks/containers, or to read-only.</li>
+</ol>
+<p>This is the recommended path when you <em>don’t</em> want everyone to
+have full root-equivalent control of the box.</p>
+<h3 id="notes">Notes</h3>
+<ul>
+<li>Portainer needs the Docker socket
+(<code>/var/run/docker.sock</code>), so the Portainer container itself
+is effectively root — protect the admin account.</li>
+<li>SSH contexts (Parts 1–5) and Portainer can coexist: CLI users use
+contexts, GUI users use Portainer, both managing the same daemon.</li>
+<li>To update: <code>docker pull portainer/portainer-ce:latest</code>,
+then remove and re-run the container — <code>portainer_data</code>
+preserves all users and settings.</li>
+</ul>
+<hr />
+<h2 id="troubleshooting">Troubleshooting</h2>
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>permission denied ... /var/run/docker.sock</code></td>
+<td>User isn’t in the <code>docker</code> group, or hasn’t logged out/in
+since being added.</td>
+</tr>
+<tr>
+<td><code>error during connect ... ssh</code></td>
+<td>SSH login itself fails — test
+<code>ssh alice@&lt;SERVER-IP&gt;</code> first.</td>
+</tr>
+<tr>
+<td><code>docker: 'compose' is not a docker command</code> (on
+server)</td>
+<td>Server needs the Compose v2 plugin:
+<code>sudo apt install docker-compose-plugin</code>.</td>
+</tr>
+<tr>
+<td>Context works but is slow</td>
+<td>SSH multiplexing helps — add a <code>ControlMaster</code> block to
+<code>~/.ssh/config</code>.</td>
+</tr>
+<tr>
+<td>Wrong host targeted</td>
+<td>Check <code>docker context ls</code> for the active <code>*</code>
+context.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="security-notes">Security notes</h2>
+<ul>
+<li><strong><code>docker</code> group = root on the server.</strong>
+There is no “containers only” mode with plain Docker. Only add trusted
+users.</li>
+<li>Keep access on the <strong>LAN</strong>. Do <strong>not</strong>
+port-forward SSH to the internet without hardening (key-only auth,
+<code>fail2ban</code>, non-default port, etc.).</li>
+<li>Prefer <strong>SSH keys over passwords</strong>, and consider
+disabling password auth in <code>/etc/ssh/sshd_config</code>
+(<code>PasswordAuthentication no</code>) once keys work.</li>
+<li>If you need <strong>per-user restrictions</strong> (limit who can
+touch which containers), plain Docker can’t do it — run
+<strong>Portainer</strong> instead and give each person a scoped
+login.</li>
+<li>This server already runs the <strong>River Monitor</strong> stack
+(port 5743 + its PostgreSQL container). Anyone with this access can stop
+or change it. Use clear container/compose-project names to keep personal
+containers separate from the production stack.</li>
+</ul>
+<hr />
+<h2 id="quick-reference">Quick reference</h2>
+<div class="sourceCode" id="cb23"><pre
+class="sourceCode bash"><code class="sourceCode bash"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Server (once, per user)</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="fu">sudo</span> usermod <span class="at">-aG</span> docker <span class="op">&lt;</span>user<span class="op">&gt;</span></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Client (once, per PC)</span></span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context create homeserver <span class="at">--docker</span> <span class="st">&quot;host=ssh://&lt;user&gt;@&lt;SERVER-IP&gt;&quot;</span></span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context use homeserver</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Daily</span></span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> ps</span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> <span class="at">--context</span> homeserver ps    <span class="co"># one-off without switching</span></span>
+<span id="cb23-11"><a href="#cb23-11" aria-hidden="true" tabindex="-1"></a><span class="ex">docker</span> context use default        <span class="co"># back to local</span></span></code></pre></div>
+</body>
+</html>
