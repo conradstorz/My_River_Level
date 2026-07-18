@@ -19,6 +19,10 @@ services:
       POSTGRES_USER: river
       POSTGRES_PASSWORD: river
       POSTGRES_DB: rivermonitor
+    ports:
+      # Published on loopback only — lets host-side tools (pytest) reach the DB
+      # without exposing PostgreSQL to the local network.
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
