@@ -2,6 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Database
+
+This project uses a shared, always-on PostgreSQL server that lives in a
+separate `shared-postgres` project (one server hosts every project's databases;
+River Monitor uses `rivermonitor` and `river_test`, owned by role `river`).
+Start it once and it stays up:
+
+```bash
+# In the shared-postgres project directory
+docker compose up -d
+```
+
+River's containers reach it over the external `shared-db` Docker network at
+hostname `postgres` — no published ports, so it works even when the Docker
+daemon is remote from the CLI machine.
+
 ## Commands
 
 ```bash
@@ -11,16 +27,16 @@ pip install -r requirements.txt
 # Run tests against a local PostgreSQL (see .env.example for TEST_DATABASE_URL)
 pytest
 
+# Run the full test suite in Docker (requires the shared-postgres server to be
+# up). Builds a test image that includes tests/ and runs pytest inside the
+# Docker network against the shared server. Works even when the Docker daemon
+# is remote. The river_test database is auto-created if missing.
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm test
+
 # Run a specific test file
 pytest tests/monitor/test_polling.py
 
-# Run the full test suite in Docker — works even when the Docker daemon is
-# remote (separate from the CLI machine). Starts the db service, builds a test
-# image that includes tests/, and runs pytest inside the Docker network. The
-# test database is created automatically by tests/conftest.py.
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm test
-
-# Run locally with Docker (recommended)
+# Run the app with Docker (requires the shared-postgres server to be up)
 docker compose up --build
 
 # Stop

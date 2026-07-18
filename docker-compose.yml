@@ -1,38 +1,25 @@
+# River Monitor connects to the shared, always-on PostgreSQL server (see the
+# separate `shared-postgres` project) over the external `shared-db` network.
+# It does not run its own database.
+#
+# Prerequisite: start the shared server first, in the shared-postgres project:
+#   docker compose up -d
 services:
   app:
     build: .
     ports:
       - "5743:5743"
     environment:
-      - DATABASE_URL=postgresql://river:river@db:5432/rivermonitor
+      - DATABASE_URL=postgresql://river:river@postgres:5432/rivermonitor
       - FLASK_SECRET_KEY=change-me-in-production
-    depends_on:
-      db:
-        condition: service_healthy
     volumes:
       - ./logs:/app/logs
     restart: unless-stopped
+    networks:
+      - shared-db
 
-  db:
-    image: postgres:16
-    environment:
-      POSTGRES_USER: river
-      POSTGRES_PASSWORD: river
-      POSTGRES_DB: rivermonitor
-    ports:
-      # Published on loopback only — lets host-side tools reach the DB (only
-      # useful when the Docker daemon is local) without exposing PostgreSQL to
-      # the local network. To run the test suite against a remote daemon, use
-      # docker-compose.test.yml instead, which needs no published ports.
-      - "127.0.0.1:5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U river -d rivermonitor"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-volumes:
-  pgdata:
+# Owned by the shared-postgres project; we join it as an external network.
+networks:
+  shared-db:
+    external: true
+    name: shared-db
