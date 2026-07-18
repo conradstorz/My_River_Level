@@ -10,10 +10,13 @@ services:
     ports:
       - "5743:5743"
     environment:
-      - DATABASE_URL=postgresql://river:river@postgres:5432/rivermonitor
-      - FLASK_SECRET_KEY=change-me-in-production
+      # Secrets come from .env (gitignored); :? fails loudly if unset.
+      - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL in .env}
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:?set FLASK_SECRET_KEY in .env}
     volumes:
-      - ./logs:/app/logs
+      # Named volume (not a host bind mount) so logs persist and the app runs
+      # against a remote Docker daemon, which can't mount Windows host paths.
+      - app_logs:/app/logs
     restart: unless-stopped
     networks:
       - shared-db
@@ -23,3 +26,6 @@ networks:
   shared-db:
     external: true
     name: shared-db
+
+volumes:
+  app_logs:

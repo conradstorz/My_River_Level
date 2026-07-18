@@ -18,6 +18,19 @@ River's containers reach it over the external `shared-db` Docker network at
 hostname `postgres` — no published ports, so it works even when the Docker
 daemon is remote from the CLI machine.
 
+### Secrets
+
+Credentials live in a gitignored `.env` (compose loads it automatically);
+nothing sensitive is committed. Copy the template and fill in real values:
+
+```bash
+cp .env.example .env
+```
+
+`DATABASE_URL` / `TEST_DATABASE_URL` must use the same `river` password as
+`RIVER_DB_PASSWORD` in the shared-postgres project's `.env`. Compose fails
+loudly (`:?`) if any required value is missing.
+
 ## Commands
 
 ```bash
