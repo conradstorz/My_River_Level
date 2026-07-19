@@ -146,4 +146,4 @@ def test_search_truncated_shows_hint(client):
     with patch("web.routes.search_sites_by_name",
                return_value=(_search_result()[0], True, "")):
         response = client.post("/sites/search", data={"gauge_name": "creek"})
-    assert b"Showing first 25" in response.data
+    assert b"25 best matches" in response.data

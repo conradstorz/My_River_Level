@@ -4,14 +4,15 @@
 <h1 class="mb-4">Monitored Sites</h1>
 
 <h4>Find a Gauge by Name</h4>
-<form method="post" action="/sites/search" class="row g-2 mb-3">
+<form method="post" action="/sites/search" class="row g-2 mb-1">
   <div class="col-md-8">
     <input name="gauge_name" class="form-control"
-           placeholder="Gauge name (e.g. Ohio River at Louisville)"
+           placeholder="Keywords in any order (e.g. louisville ohio river)"
            value="{{ query or '' }}" required>
   </div>
   <div class="col-md-2"><button class="btn btn-secondary w-100">Search</button></div>
 </form>
+<p class="text-muted small mb-3">Type any keywords — order, punctuation, and minor typos are OK. Best matches show first.</p>
 
 {% if matches %}
 <form method="post" action="/sites/add" class="row g-2 mb-4 align-items-center">
@@ -31,7 +32,7 @@
   </div>
   <div class="col-md-3"><button class="btn btn-primary w-100">Add selected</button></div>
   {% if truncated %}
-  <div class="col-12"><small class="text-muted">Showing first 25 matches — refine your search (add a state or town).</small></div>
+  <div class="col-12"><small class="text-muted">Showing the 25 best matches — add more keywords to narrow it down.</small></div>
   {% endif %}
 </form>
 {% endif %}
