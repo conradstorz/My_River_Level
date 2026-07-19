@@ -1,10 +1,16 @@
-"""Tests for USGS gauge search by station name (Monitoring Locations OGC API)."""
+"""Tests for USGS ranked keyword search (Monitoring Locations OGC API)."""
 
 from unittest.mock import patch, MagicMock
 
 import requests
 
-from monitor.site_search import search_sites_by_name
+from monitor.site_search import (
+    search_sites_by_name,
+    _tokenize,
+    _match_group,
+    _score,
+    _fetch,
+)
 
 
 def _feature(number, name, state="Kentucky", site_type="Stream"):
@@ -31,112 +37,150 @@ def _fake_response(features, status=200):
     return resp
 
 
-def test_single_match_returns_one_result():
-    features = [_feature("03294500", "OHIO RIVER AT LOUISVILLE, KY")]
-    with patch("monitor.site_search.requests.get", return_value=_fake_response(features)):
-        matches, truncated, error = search_sites_by_name("ohio river at louisville")
-    assert error == ""
-    assert truncated is False
-    assert matches == [{
-        "number": "03294500",
-        "name": "OHIO RIVER AT LOUISVILLE, KY",
-        "state": "Kentucky",
-        "site_type": "Stream",
-    }]
+# ── pure helpers ──────────────────────────────────────────────────────────
 
-
-def test_multiple_matches_are_sorted_by_name():
-    features = [
-        _feature("222", "MILL CREEK NEAR B"),
-        _feature("111", "MILL CREEK NEAR A"),
+def test_tokenize_splits_and_uppercases_dropping_short_tokens():
+    assert _tokenize("Ohio River at Louisville, KY") == [
+        "OHIO", "RIVER", "AT", "LOUISVILLE", "KY",
     ]
-    with patch("monitor.site_search.requests.get", return_value=_fake_response(features)):
-        matches, truncated, error = search_sites_by_name("mill creek")
-    assert [m["name"] for m in matches] == ["MILL CREEK NEAR A", "MILL CREEK NEAR B"]
-    assert truncated is False
+    assert _tokenize("a b cd") == ["CD"]
 
 
-def test_more_than_limit_sets_truncated_and_caps_results():
-    features = [_feature(str(i), f"CREEK {i}") for i in range(3)]
-    with patch("monitor.site_search.requests.get", return_value=_fake_response(features)):
-        matches, truncated, error = search_sites_by_name("creek", limit=2)
-    assert len(matches) == 2
-    assert truncated is True
+def test_match_group_expands_full_state_name():
+    assert _match_group("KENTUCKY") == (
+        "(monitoring_location_name LIKE '%KENTUCKY%' "
+        "OR monitoring_location_name LIKE '%, KY%')"
+    )
+
+
+def test_match_group_plain_token_and_escaping():
+    assert _match_group("LOUISVILLE") == "monitoring_location_name LIKE '%LOUISVILLE%'"
+    assert "O''BRIEN" in _match_group("O'BRIEN")
+
+
+def test_score_exact_tokens_sum_to_one_each():
+    assert _score("OHIO RIVER AT LOUISVILLE, KY", ["OHIO", "RIVER"]) == 2.0
+
+
+def test_score_ranks_typo_nearest_word_highest():
+    tokens = ["LOUSVILLE", "OHIO", "RIVER"]
+    louisville = _score("OHIO RIVER AT LOUISVILLE, KY", tokens)
+    cincinnati = _score("OHIO RIVER AT CINCINNATI, OH", tokens)
+    assert louisville > cincinnati
+
+
+def test_score_credits_state_name_via_abbreviation():
+    # "KENTUCKY" isn't in the name, but ", KY" is → full credit.
+    assert _score("OHIO RIVER AT LOUISVILLE, KY", ["KENTUCKY"]) == 1.0
+
+
+# ── _fetch helper ─────────────────────────────────────────────────────────
+
+def test_fetch_success_returns_features():
+    feats = [_feature("03294500", "OHIO RIVER AT LOUISVILLE, KY")]
+    with patch("monitor.site_search.requests.get", return_value=_fake_response(feats)):
+        features, error = _fetch("monitoring_location_name LIKE '%OHIO%'", 5)
     assert error == ""
+    assert features == feats
 
 
-def test_zero_matches_returns_empty_without_error():
-    with patch("monitor.site_search.requests.get", return_value=_fake_response([])):
-        matches, truncated, error = search_sites_by_name("zzzznotagauge")
-    assert matches == []
-    assert truncated is False
-    assert error == ""
+def test_fetch_appends_site_type_filter():
+    with patch("monitor.site_search.requests.get", return_value=_fake_response([])) as mock_get:
+        _fetch("monitoring_location_name LIKE '%OHIO%'", 5)
+    sent = mock_get.call_args.kwargs["params"]["filter"]
+    assert sent.endswith("AND site_type_code IN ('ST','LK')")
+    assert "filter-lang" not in mock_get.call_args.kwargs["params"]
 
 
-def test_http_error_returns_error_message():
-    with patch("monitor.site_search.requests.get", return_value=_fake_response([], status=500)):
-        matches, truncated, error = search_sites_by_name("ohio")
-    assert matches == []
-    assert error != ""
-
-
-def test_timeout_returns_error_message():
+def test_fetch_timeout_returns_error():
     with patch("monitor.site_search.requests.get",
                side_effect=requests.exceptions.Timeout("slow")):
-        matches, truncated, error = search_sites_by_name("ohio")
-    assert matches == []
+        features, error = _fetch("x", 5)
+    assert features == []
     assert "timed out" in error.lower()
 
 
+def test_fetch_http_error_returns_error():
+    with patch("monitor.site_search.requests.get", return_value=_fake_response([], status=500)):
+        features, error = _fetch("x", 5)
+    assert features == []
+    assert error != ""
+
+
+def test_fetch_non_dict_payload_does_not_raise():
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = ["not", "a", "dict"]
+    with patch("monitor.site_search.requests.get", return_value=resp):
+        features, error = _fetch("x", 5)
+    assert features == []
+    assert error != ""
+
+
+# ── orchestration ─────────────────────────────────────────────────────────
+
 def test_empty_query_returns_error_and_skips_api():
-    with patch("monitor.site_search.requests.get") as mock_get:
+    with patch("monitor.site_search._fetch") as mock_fetch:
         matches, truncated, error = search_sites_by_name("   ")
     assert matches == []
     assert error != ""
-    mock_get.assert_not_called()
+    mock_fetch.assert_not_called()
 
 
-def test_query_is_uppercased_wildcards_stripped_and_quotes_escaped():
-    with patch("monitor.site_search.requests.get", return_value=_fake_response([])) as mock_get:
-        search_sites_by_name("o'brien 50%_x")
-    sent_filter = mock_get.call_args.kwargs["params"]["filter"]
-    # Uppercased, single quote doubled, % and _ removed, site types constrained.
-    assert "O''BRIEN 50X" in sent_filter
-    assert "site_type_code IN ('ST','LK')" in sent_filter
+def test_clean_query_ranks_shortest_exact_name_first():
+    long = _feature("03293500", "OHIO RIVER AT WATER TOWER AT LOUISVILLE, KY")
+    short = _feature("03294500", "OHIO RIVER AT LOUISVILLE, KY")
+    # Step 1 returns everything (unsorted); both contain all keywords.
+    with patch("monitor.site_search._fetch", return_value=([long, short], "")):
+        matches, truncated, error = search_sites_by_name("ohio river louisville")
+    assert error == ""
+    assert [m["number"] for m in matches] == ["03294500", "03293500"]
 
 
-def test_non_dict_payload_does_not_raise():
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = []
-    resp.raise_for_status.side_effect = lambda: None
-    with patch("monitor.site_search.requests.get", return_value=resp):
-        matches, truncated, error = search_sites_by_name("ohio")
-    assert matches == []
-    assert truncated is False
-    assert error != ""
+def test_typo_query_relaxes_and_ranks_fuzzy_match_first():
+    anchor_hit = _feature("x", "OHIO RIVER")  # non-empty existence result
+    cincinnati = _feature("111", "OHIO RIVER AT CINCINNATI, OH")
+    louisville = _feature("03294500", "OHIO RIVER AT LOUISVILLE, KY")
+    # step1 (all 3 keywords) empty; existence: LOUSVILLE none, OHIO yes, RIVER yes;
+    # anchor fetch returns the Ohio-River pool.
+    side_effect = [
+        ([], ""),               # step 1: AND(all) -> empty (typo present)
+        ([], ""),               # existence: LOUSVILLE -> none
+        ([anchor_hit], ""),     # existence: OHIO group -> match
+        ([anchor_hit], ""),     # existence: RIVER -> match
+        ([cincinnati, louisville], ""),  # anchor pool
+    ]
+    with patch("monitor.site_search._fetch", side_effect=side_effect):
+        matches, truncated, error = search_sites_by_name("lousville ohio river")
+    assert error == ""
+    assert matches[0]["number"] == "03294500"
 
-    with patch("monitor.site_search.requests.get", return_value=_fake_response([None])):
-        matches, truncated, error = search_sites_by_name("ohio")
+
+def test_no_matches_returns_empty():
+    side_effect = [
+        ([], ""),  # step 1
+        ([], ""),  # existence token 1
+        ([], ""),  # existence token 2
+    ]
+    with patch("monitor.site_search._fetch", side_effect=side_effect):
+        matches, truncated, error = search_sites_by_name("zzzz qqqq")
     assert matches == []
     assert truncated is False
     assert error == ""
 
 
-def test_non_list_features_does_not_raise():
-    with patch(
-        "monitor.site_search.requests.get",
-        return_value=_fake_response({"unexpected": "dict"}),
-    ):
+def test_api_error_propagates():
+    with patch("monitor.site_search._fetch",
+               return_value=([], "USGS search failed. Please try again later.")):
         matches, truncated, error = search_sites_by_name("ohio")
     assert matches == []
-    assert truncated is False
-    assert error == ""
+    assert "failed" in error.lower()
 
 
-def test_all_wildcard_query_returns_error_and_skips_api():
-    with patch("monitor.site_search.requests.get") as mock_get:
-        matches, truncated, error = search_sites_by_name("%%__")
-    assert matches == []
-    assert error != ""
-    mock_get.assert_not_called()
+def test_truncated_when_more_candidates_than_limit():
+    feats = [_feature(str(i), f"MILL CREEK {i:02d}") for i in range(30)]
+    with patch("monitor.site_search._fetch", return_value=(feats, "")):
+        matches, truncated, error = search_sites_by_name("mill creek", limit=25)
+    assert len(matches) == 25
+    assert truncated is True
