@@ -79,12 +79,13 @@ Never chain or pipe bash commands. Run one command at a time. Do not use `&&`, `
 
 ## Architecture
 
-The primary entry point is `main.py`, which starts three daemon threads sharing a single `notification_queue`:
+The primary entry point is `main.py`, which starts several daemon threads sharing a single `notification_queue`:
 
-1. **Polling thread** (`monitor/polling.py`) — fetches USGS data on a configurable interval and enqueues notifications when thresholds are crossed.
-2. **Scheduler thread** (`monitor/scheduler.py`) — enforces reminder intervals so alerts aren't sent too frequently for persistent conditions.
-3. **Dispatcher thread** (`monitor/dispatcher.py`) — reads from the queue and routes messages to notification adapters.
-4. **Flask web server** (`web/app.py`, `web/routes.py`) — runs in the main thread; provides the management portal and handles webhooks.
+1. **USGS polling thread** (`monitor/polling.py`) — fetches USGS data on a configurable interval and enqueues notifications when percentile thresholds are crossed.
+2. **NOAA polling thread** (`monitor/noaa_polling.py`) — fetches NOAA NWPS gauge stages and enqueues notifications when the flood category (Action/Minor/Moderate/Major) changes.
+3. **Scheduler thread** (`monitor/scheduler.py`) — enforces reminder intervals so alerts aren't sent too frequently for persistent conditions.
+4. **Dispatcher thread** (`monitor/dispatcher.py`) — reads from the queue and routes messages to notification adapters.
+5. **Flask web server** (`web/app.py`, `web/routes.py`) — runs in its own thread; provides the management portal and handles webhooks.
 
 ### Module layout
 
@@ -94,8 +95,11 @@ Dockerfile              — Container image definition
 docker-compose.yml      — Multi-container orchestration (app + PostgreSQL)
 monitor/
   polling.py            — USGS data fetch loop; uses dataretrieval nwis.get_iv / get_dv
+  noaa_polling.py       — NOAA NWPS fetch loop; flood-category classification
+  noaa_client.py        — NOAA NWPS API client and severity mapping
   scheduler.py          — Throttles repeat alerts; tracks last-notified timestamps
   dispatcher.py         — Dequeues notifications and calls adapters
+  site_search.py        — Ranked USGS gauge search by name (Monitoring Locations OGC API)
   site_validation.py    — Validates USGS site numbers against the API
   phone_utils.py        — Phone number normalization for Twilio channels
   adapters/
@@ -105,13 +109,14 @@ monitor/
     facebook.py         — Facebook Messenger webhook
 web/
   app.py                — Flask app factory
-  routes.py             — Dashboard, Sites, Subscribers, Settings, Broadcast, webhooks
+  routes.py             — Dashboard, Sites, Subscribers, Settings, Broadcast,
+                          user landing pages (/pages, /view, /edit, /admin/pages), webhooks
 db/
   models.py             — PostgreSQL schema, init, and all DB helper functions
 tests/
   conftest.py           — Shared pytest fixtures (tmp_db)
   db/                   — Tests for models
-  monitor/              — Tests for polling, scheduling, dispatching, phone utils, site validation
+  monitor/              — Tests for polling, scheduling, dispatching, phone utils, site validation, site search
   web/                  — Tests for all Flask routes
 ```
 
@@ -141,6 +146,25 @@ Uses the `dataretrieval` package (`nwis` module):
 | `nwis.get_info(sites)` | Site metadata |
 
 Column names from `get_iv` use pattern `"00060"` or `"00060_00000"`; from `get_dv` use `"00060_Mean"`. Filtering is done with `startswith(param_code)` or `param_code in col`.
+
+Gauge search by name uses a separate service — the USGS Monitoring Locations
+OGC API (`https://api.waterdata.usgs.gov/ogcapi/v0/collections/monitoring-locations/items`),
+queried via `requests` in `monitor/site_search.py` (the `nwis` site service has
+no substring name search).
+
+### NOAA API
+
+`monitor/noaa_client.py` calls the NOAA National Water Prediction Service
+(NWPS) v1 API (`https://api.water.noaa.gov/nwps/v1`) via `requests`:
+
+| Call | Purpose |
+|---|---|
+| `GET /gauges/{lid}` | Station name, current stage, and flood-category thresholds (action / minor / moderate / major) |
+
+`classify_noaa_condition()` maps the current stage to Normal / Action / Minor /
+Moderate / Major. NOAA gauges are stored in the `noaa_gauges` table and attached
+to user landing pages (`page_noaa_gauges`); `noaa_polling.py` polls each gauge
+once regardless of how many pages reference it.
 
 ### Webhook endpoints
 
