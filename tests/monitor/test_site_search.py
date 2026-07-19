@@ -103,3 +103,29 @@ def test_query_is_uppercased_wildcards_stripped_and_quotes_escaped():
     # Uppercased, single quote doubled, % and _ removed, site types constrained.
     assert "O''BRIEN 50X" in sent_filter
     assert "site_type_code IN ('ST','LK')" in sent_filter
+
+
+def test_non_dict_payload_does_not_raise():
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = []
+    resp.raise_for_status.side_effect = lambda: None
+    with patch("monitor.site_search.requests.get", return_value=resp):
+        matches, truncated, error = search_sites_by_name("ohio")
+    assert matches == []
+    assert truncated is False
+    assert error != ""
+
+    with patch("monitor.site_search.requests.get", return_value=_fake_response([None])):
+        matches, truncated, error = search_sites_by_name("ohio")
+    assert matches == []
+    assert truncated is False
+    assert error == ""
+
+
+def test_all_wildcard_query_returns_error_and_skips_api():
+    with patch("monitor.site_search.requests.get") as mock_get:
+        matches, truncated, error = search_sites_by_name("%%__")
+    assert matches == []
+    assert error != ""
+    mock_get.assert_not_called()

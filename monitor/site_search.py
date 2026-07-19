@@ -46,6 +46,9 @@ def search_sites_by_name(query, limit=25):
         return [], False, "Enter a gauge name to search."
 
     needle = _sanitize(query)
+    if not needle:
+        return [], False, "Enter a gauge name to search."
+
     cql = (
         f"monitoring_location_name LIKE '%{needle}%' "
         f"AND site_type_code IN ('ST','LK')"
@@ -63,6 +66,7 @@ def search_sites_by_name(query, limit=25):
         resp.raise_for_status()
         data = resp.json()
     except requests.exceptions.Timeout:
+        logger.warning("USGS site search timed out for %r", query)
         return [], False, "USGS search timed out. Please try again."
     except requests.exceptions.RequestException as e:
         logger.warning("USGS site search failed for %r: %s", query, e)
@@ -70,11 +74,16 @@ def search_sites_by_name(query, limit=25):
     except ValueError:
         return [], False, "USGS search returned an unexpected response."
 
+    if not isinstance(data, dict):
+        return [], False, "USGS search returned an unexpected response."
+
     features = data.get("features", []) or []
     truncated = len(features) > limit
 
     matches = []
     for feat in features[:limit]:
+        if not isinstance(feat, dict):
+            continue
         props = feat.get("properties", {}) or {}
         number = props.get("monitoring_location_number")
         if not number:
