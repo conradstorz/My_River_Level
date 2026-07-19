@@ -1,3 +1,11 @@
+"""Flask route definitions for the River Monitor web layer.
+
+Defines every HTTP route for the management portal (dashboard, sites,
+subscribers, settings, broadcast, admin), the public landing pages
+(create/view/edit/subscribe), and the inbound Twilio and Facebook
+webhooks. All routes are attached to the app by ``register_routes(app)``.
+"""
+
 import logging
 
 from flask import render_template, current_app, request, redirect, url_for, flash
@@ -31,9 +39,11 @@ SETTINGS_FIELDS = [
 
 
 def register_routes(app):
+    """Register all portal, landing-page, and webhook routes on ``app``."""
 
     @app.route("/")
     def dashboard():
+        """GET / — render the dashboard with active sites' latest conditions and the 20 most recent notifications."""
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -68,6 +78,7 @@ def register_routes(app):
 
     @app.route("/subscribers")
     def subscribers():
+        """GET /subscribers — list all subscribers newest first."""
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -79,6 +90,12 @@ def register_routes(app):
 
     @app.route("/subscribers/add", methods=["POST"])
     def add_subscriber():
+        """POST /subscribers/add — upsert a subscriber from the form.
+
+        Requires ``channel`` and ``channel_id``; SMS/WhatsApp numbers are
+        normalized to E.164. Flashes success or an error and redirects back
+        to the subscribers page.
+        """
         db_path = current_app.config["DB_PATH"]
         display_name = request.form.get("display_name", "").strip()
         channel = request.form.get("channel", "").strip()
@@ -105,6 +122,7 @@ def register_routes(app):
 
     @app.route("/subscribers/<int:sub_id>/remove", methods=["POST"])
     def remove_subscriber(sub_id):
+        """POST /subscribers/<sub_id>/remove — deactivate a subscriber and redirect back."""
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -117,6 +135,14 @@ def register_routes(app):
 
     @app.route("/webhook/twilio", methods=["POST"])
     def webhook_twilio():
+        """POST /webhook/twilio — handle inbound Twilio SMS/WhatsApp keywords.
+
+        Detects the channel from the ``To`` number, then acts on the message
+        body: ``JOIN`` opts the sender in, ``STOP``/``UNSUBSCRIBE`` opts them
+        out, and ``PAUSE``/``RESUME`` toggle page-subscriber status. Both the
+        ``subscribers`` and ``page_subscribers`` tables are updated
+        independently. Returns an empty TwiML response.
+        """
         from_number = request.form.get("From", "")
         body = request.form.get("Body", "").strip().upper()
         to_number = request.form.get("To", "")
@@ -198,6 +224,12 @@ def register_routes(app):
 
     @app.route("/webhook/facebook", methods=["GET", "POST"])
     def webhook_facebook():
+        """GET|POST /webhook/facebook — verify the webhook and handle inbound messages.
+
+        On GET, echoes ``hub.challenge`` when ``hub.mode`` is ``subscribe`` and
+        the verify token matches (else 403). On POST, opts in any sender whose
+        message is ``JOIN`` and returns ``OK``.
+        """
         db_path = current_app.config["DB_PATH"]
         if request.method == "GET":
             mode = request.args.get("hub.mode")
@@ -229,6 +261,7 @@ def register_routes(app):
 
     @app.route("/sites")
     def sites():
+        """GET /sites — list all monitored sites with the add/search forms."""
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -240,6 +273,12 @@ def register_routes(app):
 
     @app.route("/sites/add", methods=["POST"])
     def add_site():
+        """POST /sites/add — validate a USGS site number and add it.
+
+        Requires a site number; validates it against the USGS API before
+        inserting (existing site numbers are left untouched). Flashes the
+        outcome and redirects back to the sites page.
+        """
         db_path = current_app.config["DB_PATH"]
         site_number = request.form.get("site_number", "").strip()
         param_code = request.form.get("parameter_code", "00060").strip()
@@ -268,6 +307,12 @@ def register_routes(app):
 
     @app.route("/sites/search", methods=["POST"])
     def search_sites():
+        """POST /sites/search — search USGS gauges by name.
+
+        Requires a gauge name; on error or no matches, flashes a message and
+        redirects to the sites page. Otherwise re-renders the sites page with
+        the ranked matches and a truncation flag.
+        """
         db_path = current_app.config["DB_PATH"]
         query = request.form.get("gauge_name", "").strip()
         if not query:
@@ -298,6 +343,7 @@ def register_routes(app):
 
     @app.route("/sites/<int:site_id>/toggle", methods=["POST"])
     def toggle_site(site_id):
+        """POST /sites/<site_id>/toggle — flip a site's active flag and redirect back."""
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -309,6 +355,7 @@ def register_routes(app):
 
     @app.route("/sites/<int:site_id>/remove", methods=["POST"])
     def remove_site(site_id):
+        """POST /sites/<site_id>/remove — delete a site and redirect back."""
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -321,6 +368,11 @@ def register_routes(app):
 
     @app.route("/settings", methods=["GET", "POST"])
     def settings():
+        """GET|POST /settings — view or save runtime settings.
+
+        POST persists every field in ``SETTINGS_FIELDS`` and redirects; GET
+        renders the form pre-filled with current values.
+        """
         db_path = current_app.config["DB_PATH"]
         if request.method == "POST":
             for key, _, _ in SETTINGS_FIELDS:
@@ -333,6 +385,11 @@ def register_routes(app):
 
     @app.route("/pages/new", methods=["GET", "POST"])
     def page_new():
+        """GET|POST /pages/new — create a public landing page.
+
+        POST requires a page name, creates the page, and renders the created
+        page with its public and edit tokens; GET renders the creation form.
+        """
         if request.method == "POST":
             page_name = request.form.get("page_name", "").strip()
             if not page_name:
@@ -349,6 +406,7 @@ def register_routes(app):
 
     @app.route("/view/<public_token>")
     def page_view(public_token):
+        """GET /view/<public_token> — render a public landing page, or 404 if missing/inactive."""
         from flask import abort
         from db.models import get_page_by_public_token, get_page_gauges
         db_path = current_app.config["DB_PATH"]
@@ -360,6 +418,7 @@ def register_routes(app):
 
     @app.route("/edit/<edit_token>")
     def page_edit(edit_token):
+        """GET /edit/<edit_token> — render the page editor with its gauges and active subscribers, or 404."""
         from flask import abort
         from db.models import get_page_by_edit_token, get_page_gauges, get_active_page_subscribers
         db_path = current_app.config["DB_PATH"]
@@ -373,6 +432,13 @@ def register_routes(app):
 
     @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
     def page_add_gauge(edit_token):
+        """POST /edit/<edit_token>/gauges/add — add a NOAA gauge to the page.
+
+        Requires a gauge ``lid``; looks up its NOAA metadata, upserts the gauge,
+        links it to the page, and redirects to the editor. Flashes an error and
+        redirects if the token is unknown (404), the id is missing, or the gauge
+        is not found.
+        """
         from flask import abort
         from db.models import get_page_by_edit_token, get_or_create_noaa_gauge, link_page_gauge
         db_path = current_app.config["DB_PATH"]
@@ -399,6 +465,7 @@ def register_routes(app):
 
     @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
     def page_remove_gauge(edit_token):
+        """POST /edit/<edit_token>/gauges/remove — unlink a gauge from the page and redirect to the editor (404 on bad token)."""
         from flask import abort
         from db.models import get_page_by_edit_token, unlink_page_gauge
         db_path = current_app.config["DB_PATH"]
@@ -413,6 +480,12 @@ def register_routes(app):
 
     @app.route("/edit/<edit_token>/subscribe", methods=["POST"])
     def page_subscribe(edit_token):
+        """POST /edit/<edit_token>/subscribe — subscribe a recipient to the page's alerts.
+
+        Requires ``channel`` and ``channel_id`` (SMS/WhatsApp normalized to
+        E.164); adds the page subscriber and redirects to the editor. 404s on an
+        unknown token.
+        """
         from flask import abort
         from db.models import get_page_by_edit_token, add_page_subscriber
         db_path = current_app.config["DB_PATH"]
@@ -433,6 +506,11 @@ def register_routes(app):
 
     @app.route("/edit/<edit_token>/unsubscribe", methods=["POST"])
     def page_unsubscribe(edit_token):
+        """POST /edit/<edit_token>/unsubscribe — change a page subscriber's status.
+
+        Requires ``channel`` and ``channel_id``; sets the status (default
+        ``unsubscribed``) and redirects to the editor. 404s on an unknown token.
+        """
         from flask import abort
         from db.models import get_page_by_edit_token, set_page_subscriber_status
         db_path = current_app.config["DB_PATH"]
@@ -449,6 +527,7 @@ def register_routes(app):
 
     @app.route("/admin/pages")
     def admin_pages():
+        """GET /admin/pages — list all landing pages with gauge and active-subscriber counts."""
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -469,6 +548,7 @@ def register_routes(app):
 
     @app.route("/admin/pages/<int:page_id>/toggle", methods=["POST"])
     def admin_toggle_page(page_id):
+        """POST /admin/pages/<page_id>/toggle — flip a page's active flag and redirect to the admin list."""
         db_path = current_app.config["DB_PATH"]
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -481,6 +561,12 @@ def register_routes(app):
 
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():
+        """GET|POST /broadcast — send a broadcast message to selected channels.
+
+        POST enqueues a broadcast notification when a non-empty message and a
+        notification queue are available, flashing the outcome, then redirects;
+        GET renders the broadcast form.
+        """
         db_path = current_app.config["DB_PATH"]
         notification_queue = current_app.config.get("NOTIFICATION_QUEUE")
         if request.method == "POST":

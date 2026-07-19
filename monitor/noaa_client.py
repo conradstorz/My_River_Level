@@ -1,3 +1,11 @@
+"""
+NOAA National Water Prediction Service (NWPS) API client.
+
+Fetches gauge metadata and flood-category thresholds, retrieves the current
+observed stage, and classifies flood severity (Normal / Action / Minor /
+Moderate / Major) from those thresholds.
+"""
+
 import logging
 import requests
 

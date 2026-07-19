@@ -1,3 +1,11 @@
+"""
+NOAA gauge polling thread.
+
+Periodically fetches the current stage for each configured NOAA gauge,
+classifies its flood condition, persists the result, and enqueues a
+notification whenever a gauge's flood category changes.
+"""
+
 import threading
 import logging
 
@@ -40,13 +48,23 @@ def fetch_and_evaluate_noaa_gauge(gauge, db_path=None):
 
 
 class NoaaPollingThread(threading.Thread):
+    """
+    Daemon thread that polls NOAA gauges on a configurable interval.
+
+    On each pass it evaluates every configured gauge and pushes a
+    "noaa_transition" message onto the notification queue whenever a
+    gauge's flood category changes. Runs until its stop event is set.
+    """
+
     def __init__(self, notification_queue, db_path=None, stop_event=None):
+        """Store the notification queue, DB path, and stop event."""
         super().__init__(name="NoaaPollingThread", daemon=True)
         self.notification_queue = notification_queue
         self.db_path = db_path
         self.stop_event = stop_event or threading.Event()
 
     def run(self):
+        """Poll all gauges, then sleep for poll_interval_minutes, until stopped."""
         logger.info("NoaaPollingThread started")
         while not self.stop_event.is_set():
             self._poll()
@@ -55,6 +73,7 @@ class NoaaPollingThread(threading.Thread):
         logger.info("NoaaPollingThread stopped")
 
     def _poll(self):
+        """Evaluate every gauge once, enqueuing a transition on category change."""
         gauges = get_all_noaa_gauges(self.db_path)
         for gauge in gauges:
             try:

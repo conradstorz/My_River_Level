@@ -1,3 +1,5 @@
+"""USGS polling loop that classifies gauge readings into severity levels."""
+
 import threading
 import time
 import queue
@@ -14,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_active_sites(db_path=None):
+    """Return a list of active sites as dicts of id, site_number, station_name, and parameter_code."""
     conn = get_db(db_path)
     cur = conn.cursor()
     try:
@@ -28,6 +31,7 @@ def get_active_sites(db_path=None):
 
 
 def get_previous_severity(site_id, db_path=None):
+    """Return the most recently recorded severity for a site, or None if none exists."""
     conn = get_db(db_path)
     cur = conn.cursor()
     try:
@@ -43,6 +47,7 @@ def get_previous_severity(site_id, db_path=None):
 
 
 def record_condition(site_id, current_value, unit, percentile, severity, db_path=None):
+    """Insert a new site_conditions row capturing the current reading and its severity."""
     conn = get_db(db_path)
     cur = conn.cursor()
     try:
@@ -66,6 +71,12 @@ def detect_transition(previous_severity, new_severity):
 
 
 def classify_condition(percentile, db_path=None):
+    """Map a percentile to a severity label using the configured thresholds.
+
+    Returns "UNKNOWN" for None; "SEVERE LOW" at or below very_low_percentile,
+    "LOW" at or below low_percentile, "SEVERE HIGH" at or above very_high_percentile,
+    "HIGH" at or above high_percentile, otherwise "NORMAL".
+    """
     very_low = float(get_setting("very_low_percentile", db_path, default="5"))
     low = float(get_setting("low_percentile", db_path, default="10"))
     high = float(get_setting("high_percentile", db_path, default="90"))
@@ -160,13 +171,17 @@ def fetch_and_evaluate_site(site, db_path=None):
 
 
 class PollingThread(threading.Thread):
+    """Daemon thread that polls USGS for active sites on a configurable interval."""
+
     def __init__(self, notification_queue, db_path=None, stop_event=None):
+        """Store the notification queue, optional db_path, and stop event."""
         super().__init__(name="PollingThread", daemon=True)
         self.notification_queue = notification_queue
         self.db_path = db_path
         self.stop_event = stop_event or threading.Event()
 
     def run(self):
+        """Poll on each iteration then wait poll_interval_minutes, looping until stop_event is set."""
         logger.info("PollingThread started")
         while not self.stop_event.is_set():
             self._poll()
@@ -175,6 +190,7 @@ class PollingThread(threading.Thread):
         logger.info("PollingThread stopped")
 
     def _poll(self):
+        """Evaluate every active site once and enqueue a transition message for each severity change."""
         sites = get_active_sites(self.db_path)
         for site in sites:
             transition = fetch_and_evaluate_site(site, self.db_path)

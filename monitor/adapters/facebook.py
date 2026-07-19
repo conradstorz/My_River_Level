@@ -1,3 +1,5 @@
+"""Notification adapter for Facebook Messenger."""
+
 import logging
 import requests as req
 from db.models import get_setting
@@ -8,9 +10,12 @@ SEND_API_URL = "https://graph.facebook.com/v19.0/me/messages"
 
 
 class FacebookAdapter:
+    """Sends alerts as Facebook Messenger messages via the Graph Send API."""
+
     channel = "facebook"
 
     def __init__(self, db_path=None):
+        """Initialize the adapter with an optional DB path for reading the page token."""
         self.db_path = db_path
 
     def send(self, psid, message):

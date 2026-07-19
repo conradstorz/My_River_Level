@@ -1,3 +1,4 @@
+"""Dequeue notifications and route them to the configured notification adapters."""
 import threading
 import queue
 import logging
@@ -8,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 def format_transition_message(data):
+    """Build the alert text for a USGS site changing from one severity condition to another."""
     return (
         f"⚠️ River Level Change: {data['station_name']} (#{data['site_number']})\n"
         f"Condition changed: {data['previous_severity']} → {data['new_severity']}\n"
@@ -17,6 +19,7 @@ def format_transition_message(data):
 
 
 def format_reminder_message(data):
+    """Build the reminder text restating a USGS site's current severity condition and level."""
     return (
         f"🔔 River Level Reminder: {data['station_name']} (#{data['site_number']})\n"
         f"Current condition: {data['severity']}\n"
@@ -26,6 +29,7 @@ def format_reminder_message(data):
 
 
 def format_noaa_transition_message(data):
+    """Build the alert text for a NOAA gauge changing severity, including its water.noaa.gov link."""
     return (
         f"⚠️ River Level Change: {data['station_name']} ({data['lid']})\n"
         f"Condition changed: {data['previous_severity']} → {data['new_severity']}\n"
@@ -35,6 +39,7 @@ def format_noaa_transition_message(data):
 
 
 def get_active_subscribers(db_path=None):
+    """Return all active subscribers as dicts with id, channel, and channel_id."""
     conn = get_db(db_path)
     cur = conn.cursor()
     try:
@@ -49,6 +54,7 @@ def get_active_subscribers(db_path=None):
 
 
 def log_notification(subscriber_id, site_id, channel, message, trigger_type, success, error_msg="", db_path=None):
+    """Record a sent (or failed) notification attempt in the notifications table."""
     conn = get_db(db_path)
     cur = conn.cursor()
     try:
@@ -65,7 +71,10 @@ def log_notification(subscriber_id, site_id, channel, message, trigger_type, suc
 
 
 class NotificationDispatcher(threading.Thread):
+    """Daemon thread that reads the notification queue and routes each item to its channel adapters."""
+
     def __init__(self, notification_queue, adapters=None, db_path=None, stop_event=None):
+        """Set up the dispatcher with the shared queue, adapters keyed by channel, and a stop event."""
         super().__init__(name="NotificationDispatcher", daemon=True)
         self.queue = notification_queue
         self.adapters = {a.channel: a for a in (adapters or [])}
@@ -73,6 +82,10 @@ class NotificationDispatcher(threading.Thread):
         self.stop_event = stop_event or threading.Event()
 
     def run(self):
+        """Loop calling run_once to dequeue and dispatch notifications.
+
+        Continues until the stop event is set, then logs and exits.
+        """
         logger.info("NotificationDispatcher started")
         while not self.stop_event.is_set():
             self.run_once()

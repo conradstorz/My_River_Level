@@ -1,3 +1,11 @@
+"""PostgreSQL schema, initialization, and data-access helpers for River Monitor.
+
+All persistence goes through this module (psycopg2 with RealDictCursor). It
+defines the table schema and default settings, and provides the helper
+functions used to read and write sites, settings, subscribers, user pages, and
+NOAA gauges. Each helper opens and closes its own connection; the optional
+``db_path`` argument is treated as a PostgreSQL URL (defaults to ``DATABASE_URL``).
+"""
 import os
 import uuid
 import psycopg2
@@ -146,6 +154,7 @@ def init_db(db_path=None):
 
 
 def get_setting(key, db_path=None, default=None):
+    """Return the setting value for `key` as a str, or `default` if unset."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -160,6 +169,7 @@ def get_setting(key, db_path=None, default=None):
 
 
 def set_setting(key, value, db_path=None):
+    """Upsert `key` with the string form of `value` into the settings table."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -192,6 +202,7 @@ def create_user_page(page_name, db_path=None):
 
 
 def get_page_by_public_token(token, db_path=None):
+    """Return the user_pages row for `public_token` as a dict, or None if not found."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -204,6 +215,7 @@ def get_page_by_public_token(token, db_path=None):
 
 
 def get_page_by_edit_token(token, db_path=None):
+    """Return the user_pages row for `edit_token` as a dict, or None if not found."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -238,6 +250,7 @@ def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
 
 
 def update_noaa_gauge_condition(lid, current_stage, severity, db_path=None):
+    """Update the current stage, severity, and last-polled timestamp for the gauge with `lid`."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -253,6 +266,7 @@ def update_noaa_gauge_condition(lid, current_stage, severity, db_path=None):
 
 
 def get_all_noaa_gauges(db_path=None):
+    """Return every noaa_gauges row as a list of dicts."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -265,6 +279,7 @@ def get_all_noaa_gauges(db_path=None):
 
 
 def link_page_gauge(page_id, gauge_id, db_path=None):
+    """Link a gauge to a page (insert into page_noaa_gauges); a no-op if already linked."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -279,6 +294,7 @@ def link_page_gauge(page_id, gauge_id, db_path=None):
 
 
 def unlink_page_gauge(page_id, gauge_id, db_path=None):
+    """Remove the link between a page and a gauge (delete from page_noaa_gauges)."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -329,6 +345,11 @@ def get_pages_for_noaa_gauge(gauge_id, db_path=None):
 
 
 def add_page_subscriber(page_id, channel, channel_id, display_name, db_path=None):
+    """Upsert a page subscriber, setting status to 'active'.
+
+    On conflict for an existing (page_id, channel, channel_id) the display name
+    is refreshed and the subscriber is reactivated.
+    """
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -347,6 +368,7 @@ def add_page_subscriber(page_id, channel, channel_id, display_name, db_path=None
 
 
 def set_page_subscriber_status(page_id, channel, channel_id, status, db_path=None):
+    """Update the status ('active', 'paused', or 'unsubscribed') of a page subscriber."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -362,6 +384,7 @@ def set_page_subscriber_status(page_id, channel, channel_id, status, db_path=Non
 
 
 def get_active_page_subscribers(page_id, db_path=None):
+    """Return all active page_subscribers rows for `page_id` as a list of dicts."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:

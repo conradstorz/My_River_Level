@@ -20,6 +20,7 @@ LOG_PATH = os.path.join(BASE_DIR, "logs", "river_monitor.log")
 
 
 def setup_logging():
+    """Configure root logging with a rotating file handler and console output."""
     os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
     root = logging.getLogger()
     root.setLevel(logging.INFO)
@@ -37,6 +38,7 @@ def setup_logging():
 
 
 def build_adapters():
+    """Instantiate every notification adapter, skipping any that fail to load."""
     adapters = []
     try:
         from monitor.adapters.telegram import TelegramAdapter
@@ -62,6 +64,7 @@ def build_adapters():
 
 
 def main():
+    """Initialize the DB, start all worker threads and the web server, then wait for shutdown."""
     setup_logging()
     logger = logging.getLogger(__name__)
     logger.info("River Monitor starting")
@@ -72,6 +75,7 @@ def main():
     stop_event = threading.Event()
 
     def handle_signal(signum, frame):
+        """Set the stop event on SIGTERM/SIGINT to trigger a graceful shutdown."""
         logger.info("Signal %s received — shutting down", signum)
         stop_event.set()
 
@@ -99,6 +103,7 @@ def main():
     flask_app = create_app(notification_queue=notif_queue)
 
     def run_flask():
+        """Run the Flask portal on 0.0.0.0:5743 (no reloader, threaded)."""
         logging.getLogger("werkzeug").setLevel(logging.WARNING)
         flask_app.run(host="0.0.0.0", port=5743, use_reloader=False, threaded=True)
 

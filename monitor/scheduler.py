@@ -1,3 +1,5 @@
+"""Scheduler that throttles and repeats reminder alerts for persistent conditions."""
+
 import threading
 import logging
 from datetime import datetime, timedelta, timezone
@@ -70,15 +72,19 @@ def get_current_site_severities(db_path=None):
 
 
 class SchedulerThread(threading.Thread):
+    """Daemon thread that re-enqueues reminder alerts for sites still in an alert state."""
+
     CHECK_INTERVAL_SECONDS = 300  # check every 5 minutes
 
     def __init__(self, notification_queue, db_path=None, stop_event=None):
+        """Store the notification queue, optional db_path, and stop event."""
         super().__init__(name="SchedulerThread", daemon=True)
         self.notification_queue = notification_queue
         self.db_path = db_path
         self.stop_event = stop_event or threading.Event()
 
     def run(self):
+        """Check reminders each iteration then wait CHECK_INTERVAL_SECONDS, looping until stop_event is set."""
         logger.info("SchedulerThread started")
         while not self.stop_event.is_set():
             self._check_reminders()
@@ -86,6 +92,7 @@ class SchedulerThread(threading.Thread):
         logger.info("SchedulerThread stopped")
 
     def _check_reminders(self):
+        """Enqueue a reminder message for each active site whose severity reminder is due."""
         try:
             for site in get_current_site_severities(self.db_path):
                 if is_reminder_due(site["site_id"], site["severity"], self.db_path):

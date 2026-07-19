@@ -1,3 +1,5 @@
+"""Notification adapter for WhatsApp via Twilio."""
+
 import logging
 from db.models import get_setting
 from monitor.phone_utils import normalize_e164
@@ -12,12 +14,16 @@ except ImportError:
 
 
 class WhatsAppAdapter:
+    """Sends alerts as WhatsApp messages through the Twilio REST API."""
+
     channel = "whatsapp"
 
     def __init__(self, db_path=None):
+        """Initialize the adapter with an optional DB path for reading credentials."""
         self.db_path = db_path
 
     def _get_client(self):
+        """Build a Twilio client and whatsapp:-prefixed sender from settings, or (None, None) if unconfigured."""
         sid = get_setting("twilio_account_sid", self.db_path)
         token = get_setting("twilio_auth_token", self.db_path)
         if not sid or not token:

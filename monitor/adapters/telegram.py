@@ -1,3 +1,5 @@
+"""Notification adapter for the Telegram Bot API."""
+
 import asyncio
 import threading
 import logging
@@ -15,9 +17,12 @@ except ImportError:
 
 
 class TelegramAdapter(threading.Thread):
+    """Runs a Telegram bot in its own thread, handling inbound commands and outbound alerts."""
+
     channel = "telegram"
 
     def __init__(self, db_path=None, stop_event=None):
+        """Initialize the adapter with an optional DB path and shared stop event."""
         super().__init__(name="TelegramAdapter", daemon=True)
         self.db_path = db_path
         self.stop_event = stop_event or threading.Event()
@@ -45,6 +50,7 @@ class TelegramAdapter(threading.Thread):
     # ── Inbound (bot handlers) ────────────────────────────────────────────────
 
     async def _handle_start(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+        """Handle /start: record a pending registration and greet the user."""
         chat_id = str(update.effective_chat.id)
         conn = get_db(self.db_path)
         cur = conn.cursor()
@@ -61,6 +67,7 @@ class TelegramAdapter(threading.Thread):
         )
 
     async def _handle_subscribe(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+        """Handle /subscribe: activate the subscriber and clear any pending registration."""
         chat_id = str(update.effective_chat.id)
         name = update.effective_user.full_name or "Telegram User"
         conn = get_db(self.db_path)
@@ -85,6 +92,7 @@ class TelegramAdapter(threading.Thread):
         await update.message.reply_text("✓ You are now subscribed to river level alerts.")
 
     async def _handle_unsubscribe(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
+        """Handle /unsubscribe: deactivate the subscriber and confirm."""
         chat_id = str(update.effective_chat.id)
         conn = get_db(self.db_path)
         cur = conn.cursor()
@@ -100,6 +108,7 @@ class TelegramAdapter(threading.Thread):
     # ── Thread entry point ────────────────────────────────────────────────────
 
     def run(self):
+        """Build the bot, register command handlers, and poll for updates until stopped."""
         if not TELEGRAM_AVAILABLE:
             logger.error("python-telegram-bot not installed")
             return
@@ -126,5 +135,6 @@ class TelegramAdapter(threading.Thread):
         logger.info("TelegramAdapter stopped")
 
     def stop(self):
+        """Signal the running bot application to stop polling."""
         if self._app and self._loop:
             asyncio.run_coroutine_threadsafe(self._app.stop(), self._loop)

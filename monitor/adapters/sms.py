@@ -1,3 +1,5 @@
+"""Notification adapter for SMS via Twilio."""
+
 import logging
 from db.models import get_setting
 from monitor.phone_utils import normalize_e164
@@ -12,12 +14,16 @@ except ImportError:
 
 
 class SMSAdapter:
+    """Sends alerts as SMS text messages through the Twilio REST API."""
+
     channel = "sms"
 
     def __init__(self, db_path=None):
+        """Initialize the adapter with an optional DB path for reading credentials."""
         self.db_path = db_path
 
     def _get_client(self):
+        """Build a Twilio client and SMS sender number from settings, or (None, None) if unconfigured."""
         sid = get_setting("twilio_account_sid", self.db_path)
         token = get_setting("twilio_auth_token", self.db_path)
         if not sid or not token:
@@ -25,6 +31,7 @@ class SMSAdapter:
         return Client(sid, token), get_setting("twilio_sms_number", self.db_path)
 
     def send(self, to_number, message):
+        """Send an SMS to the given number; return True on success, False otherwise."""
         if not TWILIO_AVAILABLE:
             logger.error("twilio not installed")
             return False
