@@ -39,6 +39,9 @@ Thumbs.db
 # Git worktrees
 .worktrees/
 
+# Subagent-driven-development scratch (progress ledger)
+.superpowers/
+
 # Claude Code settings
 .claude/
 
