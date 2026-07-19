@@ -4,6 +4,7 @@ from flask import render_template, current_app, request, redirect, url_for, flas
 from db.models import get_db, get_setting, set_setting
 from version import VERSION, RELEASE_DATE
 from monitor.site_validation import validate_usgs_site
+from monitor.site_search import search_sites_by_name
 from monitor.phone_utils import normalize_e164
 from monitor.noaa_client import fetch_gauge_metadata
 
@@ -264,6 +265,36 @@ def register_routes(app):
         conn.close()
         flash(f"Site {site_number} ({usgs_name}) added.", "success")
         return redirect(url_for("sites"))
+
+    @app.route("/sites/search", methods=["POST"])
+    def search_sites():
+        db_path = current_app.config["DB_PATH"]
+        query = request.form.get("gauge_name", "").strip()
+        if not query:
+            flash("Enter a gauge name to search.", "danger")
+            return redirect(url_for("sites"))
+
+        matches, truncated, error = search_sites_by_name(query)
+        if error:
+            flash(error, "danger")
+            return redirect(url_for("sites"))
+        if not matches:
+            flash(f"No gauges found matching {query!r}.", "warning")
+            return redirect(url_for("sites"))
+
+        conn = get_db(db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM sites ORDER BY station_name")
+        all_sites = cur.fetchall()
+        cur.close()
+        conn.close()
+        return render_template(
+            "sites.html",
+            sites=all_sites,
+            matches=matches,
+            query=query,
+            truncated=truncated,
+        )
 
     @app.route("/sites/<int:site_id>/toggle", methods=["POST"])
     def toggle_site(site_id):

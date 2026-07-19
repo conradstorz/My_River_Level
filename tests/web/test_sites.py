@@ -91,3 +91,59 @@ def test_toggle_site_active(client, tmp_db):
     cur.close()
     conn.close()
     assert row["active"] == 0
+
+
+def _search_result(*args, **kwargs):
+    matches = [{
+        "number": "03294500",
+        "name": "OHIO RIVER AT LOUISVILLE, KY",
+        "state": "Kentucky",
+        "site_type": "Stream",
+    }]
+    return matches, False, ""
+
+
+def test_search_renders_matches_dropdown(client):
+    with patch("web.routes.search_sites_by_name", side_effect=_search_result):
+        response = client.post("/sites/search", data={"gauge_name": "ohio river"})
+    assert response.status_code == 200
+    assert b"OHIO RIVER AT LOUISVILLE, KY" in response.data
+    assert b"03294500" in response.data
+    assert b'name="site_number"' in response.data
+
+
+def test_search_no_matches_flashes(client):
+    with patch("web.routes.search_sites_by_name", return_value=([], False, "")):
+        response = client.post(
+            "/sites/search", data={"gauge_name": "zzzznotagauge"},
+            follow_redirects=True,
+        )
+    assert response.status_code == 200
+    assert b"No gauges found" in response.data
+
+
+def test_search_api_error_flashes(client):
+    with patch("web.routes.search_sites_by_name",
+               return_value=([], False, "USGS search failed. Please try again later.")):
+        response = client.post(
+            "/sites/search", data={"gauge_name": "ohio"},
+            follow_redirects=True,
+        )
+    assert response.status_code == 200
+    assert b"USGS search failed" in response.data
+
+
+def test_search_empty_query_flashes(client):
+    response = client.post(
+        "/sites/search", data={"gauge_name": "   "},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Enter a gauge name" in response.data
+
+
+def test_search_truncated_shows_hint(client):
+    with patch("web.routes.search_sites_by_name",
+               return_value=(_search_result()[0], True, "")):
+        response = client.post("/sites/search", data={"gauge_name": "creek"})
+    assert b"Showing first 25" in response.data
