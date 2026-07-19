@@ -123,6 +123,17 @@ def test_non_dict_payload_does_not_raise():
     assert error == ""
 
 
+def test_non_list_features_does_not_raise():
+    with patch(
+        "monitor.site_search.requests.get",
+        return_value=_fake_response({"unexpected": "dict"}),
+    ):
+        matches, truncated, error = search_sites_by_name("ohio")
+    assert matches == []
+    assert truncated is False
+    assert error == ""
+
+
 def test_all_wildcard_query_returns_error_and_skips_api():
     with patch("monitor.site_search.requests.get") as mock_get:
         matches, truncated, error = search_sites_by_name("%%__")

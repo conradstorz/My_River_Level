@@ -78,6 +78,8 @@ def search_sites_by_name(query, limit=25):
         return [], False, "USGS search returned an unexpected response."
 
     features = data.get("features", []) or []
+    if not isinstance(features, list):
+        features = []
     truncated = len(features) > limit
 
     matches = []
