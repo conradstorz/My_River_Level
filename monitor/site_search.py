@@ -56,7 +56,8 @@ def search_sites_by_name(query, limit=25):
     params = {
         "f": "json",
         "limit": limit + 1,  # one extra row to detect truncation
-        "filter-lang": "cql2-text",
+        # NOTE: do not send filter-lang — the API 400s on it and already
+        # defaults to cql2-text for `filter`. Verified against the live API.
         "filter": cql,
         "sortby": "monitoring_location_name",
     }
