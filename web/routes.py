@@ -15,6 +15,7 @@ from monitor.site_validation import validate_usgs_site
 from monitor.site_search import search_sites_by_name
 from monitor.phone_utils import normalize_e164
 from monitor.noaa_client import fetch_gauge_metadata
+from monitor.gauge_enrich import annotate_liveness, annotate_noaa
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +327,18 @@ def register_routes(app):
         if not matches:
             flash(f"No gauges found matching {query!r}.", "warning")
             return redirect(url_for("sites"))
+
+        # Best-effort enrichment — never let it break search.
+        try:
+            annotate_liveness(matches)
+        except Exception:
+            logger.warning("Liveness enrichment failed", exc_info=True)
+        try:
+            annotate_noaa(matches)
+        except Exception:
+            logger.warning("NOAA enrichment failed", exc_info=True)
+        # Stable sort: live gauges first, relevance order preserved within.
+        matches.sort(key=lambda m: 0 if m.get("live") else 1)
 
         conn = get_db(db_path)
         cur = conn.cursor()

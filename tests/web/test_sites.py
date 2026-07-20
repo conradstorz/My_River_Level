@@ -147,3 +147,55 @@ def test_search_truncated_shows_hint(client):
                return_value=(_search_result()[0], True, "")):
         response = client.post("/sites/search", data={"gauge_name": "creek"})
     assert b"25 best matches" in response.data
+
+
+def _enriched_search(*args, **kwargs):
+    matches = [
+        {"number": "03293551", "name": "OHIO RIVER AT MCALPINE",
+         "state": "Kentucky", "site_type": "Stream"},
+        {"number": "09999999", "name": "DEAD CREEK",
+         "state": "Kentucky", "site_type": "Stream"},
+    ]
+    return matches, False, ""
+
+
+def _add_liveness(matches, *a, **k):
+    for m in matches:
+        if m["number"] == "03293551":
+            m.update(live=True, last_value=12.8, last_time="2026-07-19T10:15")
+        else:
+            m.update(live=False, last_value=None, last_time=None)
+    return matches
+
+
+def _add_noaa(matches, *a, **k):
+    for m in matches:
+        if m["number"] == "03293551":
+            m.update(noaa_lid="MLUK2", noaa_has_flood=True)
+        else:
+            m.update(noaa_lid=None, noaa_has_flood=False)
+    return matches
+
+
+def test_search_renders_liveness_and_noaa_badges(client):
+    with patch("web.routes.search_sites_by_name", side_effect=_enriched_search), \
+         patch("web.routes.annotate_liveness", side_effect=_add_liveness), \
+         patch("web.routes.annotate_noaa", side_effect=_add_noaa):
+        response = client.post("/sites/search", data={"gauge_name": "ohio"})
+    assert response.status_code == 200
+    body = response.data.decode()
+    assert "OHIO RIVER AT MCALPINE" in body
+    assert "Reporting" in body          # live badge
+    assert "No recent data" in body     # dead badge
+    assert "NOAA flood forecast" in body
+    # Live gauge is sorted before the dead one.
+    assert body.index("03293551") < body.index("09999999")
+
+
+def test_search_survives_enrichment_failure(client):
+    with patch("web.routes.search_sites_by_name", side_effect=_enriched_search), \
+         patch("web.routes.annotate_liveness", side_effect=Exception("boom")), \
+         patch("web.routes.annotate_noaa", side_effect=Exception("boom")):
+        response = client.post("/sites/search", data={"gauge_name": "ohio"})
+    assert response.status_code == 200
+    assert b"OHIO RIVER AT MCALPINE" in response.data  # still renders
