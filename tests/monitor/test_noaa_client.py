@@ -65,6 +65,38 @@ def test_fetch_gauge_metadata_http_error():
     assert meta is None
 
 
+def _mock_metadata_dict_response():
+    """Real NWPS shape: flood.categories is a dict keyed by name, plus a lid."""
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.json.return_value = {
+        "lid": "MLUK2",
+        "usgsId": "03293551",
+        "name": "Ohio River at McAlpine Upper",
+        "flood": {
+            "categories": {
+                "action":   {"stage": 21.0, "flow": 484486},
+                "minor":    {"stage": 23.0, "flow": 512700},
+                "moderate": {"stage": 30.0, "flow": 630001},
+                "major":    {"stage": 38.0, "flow": 783550},
+            }
+        },
+    }
+    return mock
+
+
+def test_fetch_gauge_metadata_dict_categories_and_lid():
+    with patch("monitor.noaa_client.requests.get",
+               return_value=_mock_metadata_dict_response()):
+        meta = fetch_gauge_metadata("03293551")  # looked up by USGS number
+    assert meta["lid"] == "MLUK2"
+    assert meta["station_name"] == "Ohio River at McAlpine Upper"
+    assert meta["action_stage"] == 21.0
+    assert meta["minor_flood_stage"] == 23.0
+    assert meta["moderate_flood_stage"] == 30.0
+    assert meta["major_flood_stage"] == 38.0
+
+
 def test_fetch_current_stage():
     mock = MagicMock()
     mock.status_code = 200

@@ -30,45 +30,58 @@ def classify_noaa_condition(stage, action_stage, minor_stage, moderate_stage, ma
     return "Normal"
 
 
-def fetch_gauge_metadata(lid):
+def fetch_gauge_metadata(identifier, timeout=TIMEOUT):
     """
-    Fetch station name and flood thresholds from the NWPS gauge endpoint.
+    Fetch station name, canonical LID, and flood thresholds from NWPS.
 
-    The NWPS API returns flood categories as a list under data["flood"]["categories"].
-    Each item has "name" (action/minor/moderate/major) and "stage" (float, feet).
+    `identifier` may be a NOAA LID or a USGS site number — the NWPS
+    /gauges/{id} endpoint resolves both.
+
+    NWPS returns flood categories either as a dict keyed by category name
+    ({"action": {"stage": 21.0}, ...}) or as a list of {"name", "stage"}.
+    Both shapes are handled.
 
     Returns a dict with keys:
-        station_name, action_stage, minor_flood_stage,
+        station_name, lid, action_stage, minor_flood_stage,
         moderate_flood_stage, major_flood_stage
     or None on error.
     """
-    url = f"{NWPS_BASE}/gauges/{lid.lower()}"
+    url = f"{NWPS_BASE}/gauges/{identifier.lower()}"
     try:
-        resp = requests.get(url, timeout=TIMEOUT)
+        resp = requests.get(url, timeout=timeout)
         if resp.status_code != 200:
-            logger.warning("NOAA metadata fetch failed for %s: HTTP %s", lid, resp.status_code)
+            logger.warning("NOAA metadata fetch failed for %s: HTTP %s",
+                           identifier, resp.status_code)
             return None
         data = resp.json()
     except Exception:
-        logger.exception("Error fetching NOAA metadata for %s", lid)
+        logger.exception("Error fetching NOAA metadata for %s", identifier)
         return None
 
     thresholds = {"action_stage": None, "minor_flood_stage": None,
                   "moderate_flood_stage": None, "major_flood_stage": None}
-    categories = (data.get("flood") or {}).get("categories", [])
     key_map = {
         "action":   "action_stage",
         "minor":    "minor_flood_stage",
         "moderate": "moderate_flood_stage",
         "major":    "major_flood_stage",
     }
-    for cat in categories:
+    raw = (data.get("flood") or {}).get("categories")
+    if isinstance(raw, dict):
+        items = [{"name": k, "stage": (v or {}).get("stage")}
+                 for k, v in raw.items()]
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+    for cat in items:
         name = (cat.get("name") or "").lower()
         if name in key_map:
             thresholds[key_map[name]] = cat.get("stage")
 
     return {
-        "station_name": data.get("name", lid),
+        "station_name": data.get("name", identifier),
+        "lid": data.get("lid", identifier),
         **thresholds,
     }
 
