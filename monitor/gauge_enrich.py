@@ -10,10 +10,13 @@ unchanged rather than raising, so enrichment can never break search.
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 import pandas as pd
 import dataretrieval.nwis as nwis
+
+from monitor.noaa_client import fetch_gauge_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -78,4 +81,39 @@ def annotate_liveness(matches, param_code="00060"):
         m["last_value"] = float(val)
         m["last_time"] = str(last[timecol]) if timecol else None
 
+    return matches
+
+
+def annotate_noaa(matches, timeout=6, max_workers=8):
+    """Flag which matches have a co-located NOAA flood-forecast gauge.
+
+    The NWPS /gauges/{id} endpoint accepts a USGS site number, so each USGS
+    match can be probed directly. Adds `noaa_lid` (str|None) and
+    `noaa_has_flood` (bool). Concurrent and best-effort — a failed lookup
+    leaves that match's NOAA fields empty.
+    """
+    for m in matches:
+        m.setdefault("noaa_lid", None)
+        m.setdefault("noaa_has_flood", False)
+
+    def _probe(m):
+        number = m.get("number")
+        if not number:
+            return
+        try:
+            meta = fetch_gauge_metadata(number, timeout=timeout)
+        except Exception as e:
+            logger.warning("NOAA probe failed for %s: %s", number, e)
+            return
+        if not meta:
+            return
+        has_flood = any(meta.get(k) is not None for k in (
+            "action_stage", "minor_flood_stage",
+            "moderate_flood_stage", "major_flood_stage"))
+        m["noaa_lid"] = meta.get("lid")
+        m["noaa_has_flood"] = bool(has_flood)
+
+    if matches:
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            list(pool.map(_probe, matches))
     return matches

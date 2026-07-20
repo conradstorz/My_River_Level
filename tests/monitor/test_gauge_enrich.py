@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from monitor.gauge_enrich import annotate_liveness
+from monitor.gauge_enrich import annotate_liveness, annotate_noaa
 
 
 def _matches():
@@ -43,3 +43,35 @@ def test_annotate_liveness_survives_api_failure():
         out = annotate_liveness(_matches())
     assert all(m["live"] is False for m in out)   # unchanged, no raise
     assert len(out) == 2
+
+
+def _fake_noaa(identifier, timeout=6):
+    if identifier == "03293551":
+        return {"lid": "MLUK2", "station_name": "Ohio River",
+                "action_stage": 21.0, "minor_flood_stage": 23.0,
+                "moderate_flood_stage": 30.0, "major_flood_stage": 38.0}
+    return None  # no NOAA gauge at this USGS site (HTTP 404)
+
+
+def test_annotate_noaa_flags_forecast_gauges():
+    matches = [
+        {"number": "03293551", "name": "OHIO RIVER"},
+        {"number": "09999999", "name": "NO NOAA HERE"},
+    ]
+    with patch("monitor.gauge_enrich.fetch_gauge_metadata",
+               side_effect=_fake_noaa):
+        out = annotate_noaa(matches)
+    by = {m["number"]: m for m in out}
+    assert by["03293551"]["noaa_has_flood"] is True
+    assert by["03293551"]["noaa_lid"] == "MLUK2"
+    assert by["09999999"]["noaa_has_flood"] is False
+    assert by["09999999"]["noaa_lid"] is None
+
+
+def test_annotate_noaa_survives_lookup_failure():
+    matches = [{"number": "03293551", "name": "OHIO RIVER"}]
+    with patch("monitor.gauge_enrich.fetch_gauge_metadata",
+               side_effect=Exception("NWPS down")):
+        out = annotate_noaa(matches)
+    assert out[0]["noaa_has_flood"] is False   # no raise
+    assert out[0]["noaa_lid"] is None
