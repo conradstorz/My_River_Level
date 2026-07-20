@@ -103,8 +103,14 @@ def _search_result(*args, **kwargs):
     return matches, False, ""
 
 
+def _identity(matches, *args, **kwargs):
+    return matches
+
+
 def test_search_renders_matches_dropdown(client):
-    with patch("web.routes.search_sites_by_name", side_effect=_search_result):
+    with patch("web.routes.search_sites_by_name", side_effect=_search_result), \
+         patch("web.routes.annotate_liveness", side_effect=_identity), \
+         patch("web.routes.annotate_noaa", side_effect=_identity):
         response = client.post("/sites/search", data={"gauge_name": "ohio river"})
     assert response.status_code == 200
     assert b"OHIO RIVER AT LOUISVILLE, KY" in response.data
@@ -144,7 +150,9 @@ def test_search_empty_query_flashes(client):
 
 def test_search_truncated_shows_hint(client):
     with patch("web.routes.search_sites_by_name",
-               return_value=(_search_result()[0], True, "")):
+               return_value=(_search_result()[0], True, "")), \
+         patch("web.routes.annotate_liveness", side_effect=_identity), \
+         patch("web.routes.annotate_noaa", side_effect=_identity):
         response = client.post("/sites/search", data={"gauge_name": "creek"})
     assert b"25 best matches" in response.data
 
