@@ -447,10 +447,11 @@ def register_routes(app):
     def page_add_gauge(edit_token):
         """POST /edit/<edit_token>/gauges/add — add a NOAA gauge to the page.
 
-        Requires a gauge ``lid``; looks up its NOAA metadata, upserts the gauge,
-        links it to the page, and redirects to the editor. Flashes an error and
-        redirects if the token is unknown (404), the id is missing, or the gauge
-        is not found.
+        Accepts a gauge ``lid`` **or** a USGS site number (``fetch_gauge_metadata``
+        resolves either); looks up its NOAA metadata, upserts the gauge under its
+        canonical LID, links it to the page, and redirects to the editor. Flashes
+        an error and redirects if the token is unknown (404), the id is missing,
+        or the gauge is not found.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, get_or_create_noaa_gauge, link_page_gauge
@@ -486,12 +487,13 @@ def register_routes(app):
         Runs the ranked USGS name search, keeps only results with a co-located
         NOAA flood-forecast point, and re-renders the editor with them.
         """
+        from flask import abort
         db_path = current_app.config["DB_PATH"]
         from db.models import (get_page_by_edit_token, get_page_gauges,
                                get_active_page_subscribers)
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
-            return ("Page not found", 404)
+            abort(404)
 
         query = request.form.get("gauge_name", "").strip()
         gauge_matches = []
