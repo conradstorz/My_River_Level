@@ -46,8 +46,8 @@ def fetch_gauge_metadata(identifier, timeout=TIMEOUT):
         moderate_flood_stage, major_flood_stage
     or None on error.
     """
-    url = f"{NWPS_BASE}/gauges/{identifier.lower()}"
     try:
+        url = f"{NWPS_BASE}/gauges/{identifier.lower()}"
         resp = requests.get(url, timeout=timeout)
         if resp.status_code != 200:
             logger.warning("NOAA metadata fetch failed for %s: HTTP %s",

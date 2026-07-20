@@ -97,6 +97,11 @@ def test_fetch_gauge_metadata_dict_categories_and_lid():
     assert meta["major_flood_stage"] == 38.0
 
 
+def test_fetch_gauge_metadata_none_identifier_returns_none():
+    # A None/non-string identifier must degrade to None, never raise.
+    assert fetch_gauge_metadata(None) is None
+
+
 def test_fetch_current_stage():
     mock = MagicMock()
     mock.status_code = 200

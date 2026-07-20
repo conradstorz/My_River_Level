@@ -70,7 +70,10 @@ def annotate_liveness(matches, param_code="00060"):
     timecol = "datetime" if "datetime" in df.columns else None
 
     for m in matches:
-        rows = df[df["site_no"] == m["number"]]
+        number = m.get("number")
+        if not number:
+            continue
+        rows = df[df["site_no"] == number]
         if len(rows) == 0:
             continue
         last = rows.iloc[-1]
@@ -84,7 +87,7 @@ def annotate_liveness(matches, param_code="00060"):
     return matches
 
 
-def annotate_noaa(matches, timeout=6, max_workers=8):
+def annotate_noaa(matches, timeout=3, max_workers=8):
     """Flag which matches have a co-located NOAA flood-forecast gauge.
 
     The NWPS /gauges/{id} endpoint accepts a USGS site number, so each USGS

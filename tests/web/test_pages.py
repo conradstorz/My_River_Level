@@ -51,6 +51,17 @@ def test_page_gauge_search_lists_only_noaa_gauges(client, tmp_db):
     assert "MLUK2" in body
 
 
+def test_page_gauge_search_survives_enrichment_failure(client, tmp_db):
+    # If annotate_noaa raises, the editor still renders (200) with no matches.
+    edit_token = _make_edit_token(client)
+    with patch("web.routes.search_sites_by_name", side_effect=_noaa_search), \
+         patch("web.routes.annotate_noaa", side_effect=Exception("NWPS down")):
+        resp = client.post(f"/edit/{edit_token}/gauges/search",
+                           data={"gauge_name": "ohio"}, follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"No NOAA gauges found" in resp.data
+
+
 def _meta_ok(identifier, timeout=10):
     return {"lid": "MLUK2", "station_name": "Ohio River at McAlpine",
             "action_stage": 21.0, "minor_flood_stage": 23.0,
