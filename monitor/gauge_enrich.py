@@ -3,7 +3,7 @@ Best-effort enrichment of gauge search results.
 
 Layered on top of the ranked USGS name search (monitor/site_search.py) so the
 UI can flag which gauges still report live data (annotate_liveness) and which
-have a co-located NOAA flood-forecast point (annotate_noaa, added later).
+have a co-located NOAA flood-forecast point (annotate_noaa).
 
 Every function here is best-effort: on any API failure it returns the matches
 unchanged rather than raising, so enrichment can never break search.
