@@ -15,6 +15,7 @@ from monitor.site_validation import validate_usgs_site
 from monitor.site_search import search_sites_by_name
 from monitor.phone_utils import normalize_e164
 from monitor.noaa_client import fetch_gauge_metadata
+from monitor.gauge_enrich import annotate_liveness, annotate_noaa
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +328,18 @@ def register_routes(app):
             flash(f"No gauges found matching {query!r}.", "warning")
             return redirect(url_for("sites"))
 
+        # Best-effort enrichment — never let it break search.
+        try:
+            annotate_liveness(matches)
+        except Exception:
+            logger.warning("Liveness enrichment failed", exc_info=True)
+        try:
+            annotate_noaa(matches)
+        except Exception:
+            logger.warning("NOAA enrichment failed", exc_info=True)
+        # Stable sort: live gauges first, relevance order preserved within.
+        matches.sort(key=lambda m: 0 if m.get("live") else 1)
+
         conn = get_db(db_path)
         cur = conn.cursor()
         cur.execute("SELECT * FROM sites ORDER BY station_name")
@@ -434,10 +447,11 @@ def register_routes(app):
     def page_add_gauge(edit_token):
         """POST /edit/<edit_token>/gauges/add — add a NOAA gauge to the page.
 
-        Requires a gauge ``lid``; looks up its NOAA metadata, upserts the gauge,
-        links it to the page, and redirects to the editor. Flashes an error and
-        redirects if the token is unknown (404), the id is missing, or the gauge
-        is not found.
+        Accepts a gauge ``lid`` **or** a USGS site number (``fetch_gauge_metadata``
+        resolves either); looks up its NOAA metadata, upserts the gauge under its
+        canonical LID, links it to the page, and redirects to the editor. Flashes
+        an error and redirects if the token is unknown (404), the id is missing,
+        or the gauge is not found.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, get_or_create_noaa_gauge, link_page_gauge
@@ -445,23 +459,64 @@ def register_routes(app):
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
-        lid = request.form.get("lid", "").strip().upper()
-        if not lid:
+
+        identifier = request.form.get("lid", "").strip()
+        if not identifier:
             flash("Gauge ID is required.", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
-        meta = fetch_gauge_metadata(lid)
-        if meta is None:
-            flash(f"Gauge '{lid}' not found in the NOAA database.", "danger")
+
+        meta = fetch_gauge_metadata(identifier)
+        if not meta:
+            flash(f"Gauge '{identifier}' not found in the NOAA database.", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
+
         gauge_id = get_or_create_noaa_gauge(
-            lid, meta["station_name"],
+            meta["lid"], meta["station_name"],
             meta["action_stage"], meta["minor_flood_stage"],
             meta["moderate_flood_stage"], meta["major_flood_stage"],
-            db_path
+            db_path,
         )
         link_page_gauge(page["id"], gauge_id, db_path)
-        flash(f"Added {meta['station_name']}.", "success")
+        flash(f"Gauge {meta['station_name']} added.", "success")
         return redirect(url_for("page_edit", edit_token=edit_token))
+
+    @app.route("/edit/<edit_token>/gauges/search", methods=["POST"])
+    def page_search_gauges(edit_token):
+        """POST /edit/<edit_token>/gauges/search — find NOAA gauges by name.
+
+        Runs the ranked USGS name search, keeps only results with a co-located
+        NOAA flood-forecast point, and re-renders the editor with them.
+        """
+        from flask import abort
+        db_path = current_app.config["DB_PATH"]
+        from db.models import (get_page_by_edit_token, get_page_gauges,
+                               get_active_page_subscribers)
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+
+        query = request.form.get("gauge_name", "").strip()
+        gauge_matches = []
+        if not query:
+            flash("Enter a gauge name to search.", "danger")
+        else:
+            matches, _truncated, error = search_sites_by_name(query)
+            if error:
+                flash(error, "danger")
+            else:
+                try:
+                    annotate_noaa(matches)
+                except Exception:
+                    logger.warning("NOAA enrichment failed", exc_info=True)
+                gauge_matches = [m for m in matches if m.get("noaa_has_flood")]
+                if not gauge_matches:
+                    flash(f"No NOAA gauges found matching {query!r}.", "warning")
+
+        gauges = get_page_gauges(page["id"], db_path)
+        subscribers = get_active_page_subscribers(page["id"], db_path)
+        return render_template("page_edit.html", page=page, gauges=gauges,
+                              subscribers=subscribers, edit_token=edit_token,
+                              gauge_matches=gauge_matches, gauge_query=query)
 
     @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
     def page_remove_gauge(edit_token):

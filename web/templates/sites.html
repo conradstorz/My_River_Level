@@ -15,26 +15,49 @@
 <p class="text-muted small mb-3">Type any keywords — order, punctuation, and minor typos are OK. Best matches show first.</p>
 
 {% if matches %}
-<form method="post" action="/sites/add" class="row g-2 mb-4 align-items-center">
-  <div class="col-12"><label class="form-label mb-1">Matches</label></div>
-  <div class="col-md-6">
-    <select name="site_number" class="form-select">
-      {% for m in matches %}
-      <option value="{{ m.number }}">{{ m.name }} — {{ m.number }}{% if m.state %}, {{ m.state }}{% endif %}</option>
-      {% endfor %}
-    </select>
-  </div>
-  <div class="col-md-3">
-    <select name="parameter_code" class="form-select">
-      <option value="00060">Discharge (cfs)</option>
-      <option value="00065">Gage height (ft)</option>
-    </select>
-  </div>
-  <div class="col-md-3"><button class="btn btn-primary w-100">Add selected</button></div>
+<div class="mb-4">
+  <label class="form-label mb-1">Matches</label>
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>Station</th><th>Site #</th><th>Status</th><th>NOAA</th><th>Add</th></tr>
+    </thead>
+    <tbody>
+    {% for m in matches %}
+      <tr>
+        <td>{{ m.name }}{% if m.state %} <span class="text-muted small">— {{ m.state }}</span>{% endif %}</td>
+        <td><code>{{ m.number }}</code></td>
+        <td>
+          {% if m.live %}
+            <span class="badge bg-success">Reporting{% if m.last_value is not none %} · {{ "%.1f"|format(m.last_value) }}{% endif %}</span>
+          {% else %}
+            <span class="badge bg-secondary">No recent data</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if m.noaa_has_flood %}
+            <span class="badge bg-info text-dark" title="NOAA flood forecast: {{ m.noaa_lid }}">🌊 NOAA flood forecast</span>
+          {% else %}
+            <span class="text-muted small">—</span>
+          {% endif %}
+        </td>
+        <td>
+          <form method="post" action="/sites/add" class="d-flex gap-1">
+            <input type="hidden" name="site_number" value="{{ m.number }}">
+            <select name="parameter_code" class="form-select form-select-sm" style="width:auto">
+              <option value="00060">Discharge (cfs)</option>
+              <option value="00065">Gage height (ft)</option>
+            </select>
+            <button class="btn btn-sm btn-primary">Add</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
   {% if truncated %}
-  <div class="col-12"><small class="text-muted">Showing the 25 best matches — add more keywords to narrow it down.</small></div>
+  <small class="text-muted">Showing the 25 best matches — add more keywords to narrow it down.</small>
   {% endif %}
-</form>
+</div>
 {% endif %}
 
 <h4>Add Site by USGS Number</h4>

@@ -1,4 +1,5 @@
 import pytest
+from unittest.mock import patch
 from db.models import init_db
 
 
@@ -10,6 +11,71 @@ def client(tmp_db):
     app.config["TESTING"] = True
     with app.test_client() as c:
         yield c
+
+
+def _make_edit_token(client):
+    from db.models import create_user_page
+    db_path = client.application.config["DB_PATH"]
+    _pub, edit = create_user_page("Gauge Test Page", db_path)
+    return edit
+
+
+def _noaa_search(*args, **kwargs):
+    matches = [
+        {"number": "03293551", "name": "OHIO RIVER AT MCALPINE",
+         "state": "Kentucky", "site_type": "Stream"},
+        {"number": "09999999", "name": "NO FORECAST CREEK",
+         "state": "Kentucky", "site_type": "Stream"},
+    ]
+    return matches, False, ""
+
+
+def _noaa_annotate(matches, *a, **k):
+    for m in matches:
+        if m["number"] == "03293551":
+            m.update(noaa_lid="MLUK2", noaa_has_flood=True)
+        else:
+            m.update(noaa_lid=None, noaa_has_flood=False)
+    return matches
+
+
+def test_page_gauge_search_lists_only_noaa_gauges(client, tmp_db):
+    edit_token = _make_edit_token(client)
+    with patch("web.routes.search_sites_by_name", side_effect=_noaa_search), \
+         patch("web.routes.annotate_noaa", side_effect=_noaa_annotate):
+        resp = client.post(f"/edit/{edit_token}/gauges/search",
+                           data={"gauge_name": "ohio"})
+    body = resp.data.decode()
+    assert "OHIO RIVER AT MCALPINE" in body   # has NOAA forecast → shown
+    assert "NO FORECAST CREEK" not in body    # no NOAA forecast → filtered out
+    assert "MLUK2" in body
+
+
+def test_page_gauge_search_survives_enrichment_failure(client, tmp_db):
+    # If annotate_noaa raises, the editor still renders (200) with no matches.
+    edit_token = _make_edit_token(client)
+    with patch("web.routes.search_sites_by_name", side_effect=_noaa_search), \
+         patch("web.routes.annotate_noaa", side_effect=Exception("NWPS down")):
+        resp = client.post(f"/edit/{edit_token}/gauges/search",
+                           data={"gauge_name": "ohio"}, follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"No NOAA gauges found" in resp.data
+
+
+def _meta_ok(identifier, timeout=10):
+    return {"lid": "MLUK2", "station_name": "Ohio River at McAlpine",
+            "action_stage": 21.0, "minor_flood_stage": 23.0,
+            "moderate_flood_stage": 30.0, "major_flood_stage": 38.0}
+
+
+def test_page_add_gauge_accepts_usgs_number_and_stores_lid(client, tmp_db):
+    edit_token = _make_edit_token(client)
+    with patch("web.routes.fetch_gauge_metadata", side_effect=_meta_ok):
+        client.post(f"/edit/{edit_token}/gauges/add",
+                    data={"lid": "03293551"}, follow_redirects=True)
+    from db.models import get_all_noaa_gauges
+    gauges = get_all_noaa_gauges(tmp_db)
+    assert any(g["lid"] == "MLUK2" for g in gauges)  # canonical LID stored
 
 
 def test_new_page_get(client):
@@ -93,7 +159,7 @@ def test_add_gauge_to_page(client):
     _, edit = create_user_page("Test", db_path)
     page = get_page_by_edit_token(edit, db_path)
     mock_meta = {
-        "station_name": "Ohio River at McAlpine Upper",
+        "lid": "MLUK2", "station_name": "Ohio River at McAlpine Upper",
         "action_stage": 21.0, "minor_flood_stage": 23.0,
         "moderate_flood_stage": 30.0, "major_flood_stage": 38.0,
     }
@@ -125,7 +191,7 @@ def test_remove_gauge_from_page(client):
     _, edit = create_user_page("Test", db_path)
     page = get_page_by_edit_token(edit, db_path)
     mock_meta = {
-        "station_name": "Ohio River at McAlpine Upper",
+        "lid": "MLUK2", "station_name": "Ohio River at McAlpine Upper",
         "action_stage": 21.0, "minor_flood_stage": 23.0,
         "moderate_flood_stage": 30.0, "major_flood_stage": 38.0,
     }
