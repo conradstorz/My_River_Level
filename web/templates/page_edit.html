@@ -8,10 +8,29 @@
     <div class="card">
       <div class="card-header">Gauges</div>
       <div class="card-body">
+        <form method="post" action="{{ url_for('page_search_gauges', edit_token=edit_token) }}" class="input-group mb-2">
+          <input type="text" name="gauge_name" class="form-control"
+                 placeholder="Search gauges by name (e.g. ohio river louisville)"
+                 value="{{ gauge_query or '' }}" required>
+          <button class="btn btn-secondary" type="submit">Search</button>
+        </form>
+        {% if gauge_matches %}
+        <ul class="list-group mb-2">
+          {% for m in gauge_matches %}
+          <li class="list-group-item d-flex justify-content-between align-items-center">
+            <span>{{ m.name }} <span class="text-muted small">({{ m.noaa_lid }})</span></span>
+            <form method="post" action="{{ url_for('page_add_gauge', edit_token=edit_token) }}" class="m-0">
+              <input type="hidden" name="lid" value="{{ m.noaa_lid }}">
+              <button class="btn btn-sm btn-primary">Add</button>
+            </form>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
         <form method="post" action="{{ url_for('page_add_gauge', edit_token=edit_token) }}" class="input-group mb-3">
           <input type="text" name="lid" class="form-control text-uppercase"
-                 placeholder="NOAA Gauge ID (e.g. MLUK2)" required>
-          <button class="btn btn-primary" type="submit">Add</button>
+                 placeholder="…or enter a NOAA LID directly (e.g. MLUK2)" required>
+          <button class="btn btn-outline-secondary" type="submit">Add by ID</button>
         </form>
         {% if gauges %}
         <ul class="list-group list-group-flush">
