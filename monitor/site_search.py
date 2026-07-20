@@ -189,6 +189,40 @@ def search_sites_by_name(query, limit=25):
             if error:
                 return [], False, error
 
+            # Step 3: the surviving keywords each exist but never co-occur in a
+            # single name — USGS often names a site unlike the user's words
+            # (e.g. "OHIO R US OF MCALPINE DAM" vs. NOAA's "McAlpine Upper").
+            # OR the anchors so partial matches surface instead of returning
+            # nothing, and rank matches of the RAREST (most distinctive)
+            # keyword first, so a common word like "upper" (thousands of hits)
+            # doesn't bury the site the user actually meant.
+            if not features and len(anchors) > 1:
+                pools = []
+                for group in anchors:
+                    found, err = _fetch(group, _FETCH_CAP)
+                    if err:
+                        return [], False, err
+                    pools.append(found)
+                # Smaller pool = rarer, more discriminating keyword.
+                rarest = min(range(len(pools)), key=lambda i: len(pools[i]))
+                by_number = {}
+                for i, found in enumerate(pools):
+                    for f in found:
+                        m = _to_match(f)
+                        if not m:
+                            continue
+                        entry = by_number.setdefault(m["number"], [m, set()])
+                        entry[1].add(i)
+                ranked = sorted(
+                    by_number.values(),
+                    key=lambda e: (0 if rarest in e[1] else 1,
+                                   -_score(e[0]["name"], tokens),
+                                   len(e[0]["name"]), e[0]["name"]),
+                )
+                candidates = [m for m, _groups in ranked]
+                truncated = len(candidates) > limit
+                return candidates[:limit], truncated, ""
+
     candidates = [m for m in (_to_match(f) for f in features) if m]
     candidates.sort(key=lambda m: (-_score(m["name"], tokens),
                                    len(m["name"]), m["name"]))

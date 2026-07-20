@@ -157,6 +157,37 @@ def test_typo_query_relaxes_and_ranks_fuzzy_match_first():
     assert matches[0]["number"] == "03294500"
 
 
+def test_disjoint_keywords_rank_rarest_keyword_first():
+    # "mcalpine upper": both keywords exist in USGS data but never co-occur in
+    # one name (USGS names the site "OHIO R US OF MCALPINE DAM", not "McAlpine
+    # Upper"). The strict AND yields nothing; the search ORs the surviving
+    # keywords AND ranks matches of the rarer keyword (MCALPINE, 2 hits) ahead
+    # of the common one (UPPER, 3 hits), so "upper" can't bury the McAlpine gauge.
+    mcalpine_ohio = _feature("03293551",
+                             "OHIO R US OF MCALPINE DAM @ RRB AT LOUISVILLE, KY")
+    mcalpine_creek = _feature("02146600",
+                              "MCALPINE CR AT SARDIS ROAD NEAR CHARLOTTE, NC")
+    upper1 = _feature("111", "UPPER IOWA RIVER AT DECORAH, IA")
+    upper2 = _feature("222", "UPPER TRUCKEE RIVER, CA")
+    upper3 = _feature("333", "UPPER MISSISSIPPI RIVER, MN")
+    side_effect = [
+        ([], ""),                                   # step 1: AND(all) -> empty
+        ([mcalpine_creek], ""),                     # existence: MCALPINE -> match
+        ([upper1], ""),                             # existence: UPPER -> match
+        ([], ""),                                   # AND(anchors) -> still empty
+        ([mcalpine_ohio, mcalpine_creek], ""),      # OR pool: MCALPINE (rarer)
+        ([upper1, upper2, upper3], ""),             # OR pool: UPPER (commoner)
+    ]
+    with patch("monitor.site_search._fetch", side_effect=side_effect):
+        matches, truncated, error = search_sites_by_name("mcalpine upper", limit=25)
+    assert error == ""
+    numbers = [m["number"] for m in matches]
+    assert "03293551" in numbers  # the McAlpine gauge surfaces (was 0 results)
+    # Both McAlpine (rarer-keyword) sites rank ahead of every UPPER-only site.
+    assert numbers.index("03293551") < numbers.index("111")
+    assert numbers.index("02146600") < numbers.index("111")
+
+
 def test_no_matches_returns_empty():
     side_effect = [
         ([], ""),  # step 1
