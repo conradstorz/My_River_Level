@@ -42,7 +42,7 @@ def fetch_gauge_metadata(identifier, timeout=TIMEOUT):
     Both shapes are handled.
 
     Returns a dict with keys:
-        station_name, lid, action_stage, minor_flood_stage,
+        station_name, lid, usgs_id, action_stage, minor_flood_stage,
         moderate_flood_stage, major_flood_stage
     or None on error.
     """
