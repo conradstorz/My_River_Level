@@ -320,14 +320,15 @@ def register_routes(app):
             flash("Enter a gauge name to search.", "danger")
             return redirect(url_for("sites"))
 
-        matches, truncated, error = search_sites_by_name(query)
+        candidates, capped, error = search_sites_by_name(query)
         if error:
             flash(error, "danger")
             return redirect(url_for("sites"))
-        if not matches:
+        if not candidates:
             flash(f"No gauges found matching {query!r}.", "warning")
             return redirect(url_for("sites"))
 
+        matches = candidates[:25]
         # Best-effort enrichment — never let it break search.
         try:
             annotate_liveness(matches)
@@ -351,7 +352,7 @@ def register_routes(app):
             sites=all_sites,
             matches=matches,
             query=query,
-            truncated=truncated,
+            truncated=capped,
         )
 
     @app.route("/sites/<int:site_id>/toggle", methods=["POST"])

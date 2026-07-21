@@ -108,15 +108,16 @@ def _to_match(feat):
     }
 
 
-def search_sites_by_name(query, limit=25):
+def search_sites_by_name(query, cap=_FETCH_CAP):
     """
     Search USGS monitoring locations by keywords, ranked best-first.
 
-    Returns (matches, truncated, error):
-      matches:   list of {number, name, state, site_type}, <= limit, ranked by
-                 relevance (most likely first)
-      truncated: True if more candidates were found than returned
-      error:     "" on success, else a human-readable message
+    Returns (candidates, capped, error):
+      candidates: the full ranked pool of {number, name, state, site_type}
+                  dicts (up to `cap`), most relevant first
+      capped:     True if the candidate pool reached `cap` (more matches may
+                  exist beyond what was fetched)
+      error:      "" on success, else a human-readable message
     """
     if not query or not query.strip():
         return [], False, "Enter a gauge name to search."
@@ -176,11 +177,11 @@ def search_sites_by_name(query, limit=25):
                                    len(e[0]["name"]), e[0]["name"]),
                 )
                 candidates = [m for m, _groups in ranked]
-                truncated = len(candidates) > limit
-                return candidates[:limit], truncated, ""
+                capped = len(candidates) >= cap
+                return candidates, capped, ""
 
     candidates = [m for m in (_to_match(f) for f in features) if m]
     candidates.sort(key=lambda m: (-_score(m["name"], tokens),
                                    len(m["name"]), m["name"]))
-    truncated = len(candidates) > limit
-    return candidates[:limit], truncated, ""
+    capped = len(candidates) >= cap
+    return candidates, capped, ""

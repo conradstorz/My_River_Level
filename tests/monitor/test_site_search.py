@@ -122,8 +122,8 @@ def test_fetch_non_dict_payload_does_not_raise():
 
 def test_empty_query_returns_error_and_skips_api():
     with patch("monitor.site_search._fetch") as mock_fetch:
-        matches, truncated, error = search_sites_by_name("   ")
-    assert matches == []
+        candidates, capped, error = search_sites_by_name("   ")
+    assert candidates == []
     assert error != ""
     mock_fetch.assert_not_called()
 
@@ -133,9 +133,19 @@ def test_clean_query_ranks_shortest_exact_name_first():
     short = _feature("03294500", "OHIO RIVER AT LOUISVILLE, KY")
     # Step 1 returns everything (unsorted); both contain all keywords.
     with patch("monitor.site_search._fetch", return_value=([long, short], "")):
-        matches, truncated, error = search_sites_by_name("ohio river louisville")
+        candidates, capped, error = search_sites_by_name("ohio river louisville")
     assert error == ""
-    assert [m["number"] for m in matches] == ["03294500", "03293500"]
+    assert [m["number"] for m in candidates] == ["03294500", "03293500"]
+
+
+def test_truncated_when_pool_reaches_cap():
+    # A full pool (== cap) reports capped=True.
+    feats = [_feature(str(i), f"MILL CREEK {i:02d}") for i in range(3)]
+    with patch("monitor.site_search._fetch", return_value=(feats, "")), \
+         patch("monitor.site_search._FETCH_CAP", 3):
+        candidates, capped, error = search_sites_by_name("mill creek", cap=3)
+    assert capped is True
+    assert len(candidates) == 3
 
 
 def test_typo_query_relaxes_and_ranks_fuzzy_match_first():
@@ -152,9 +162,9 @@ def test_typo_query_relaxes_and_ranks_fuzzy_match_first():
         ([cincinnati, louisville], ""),  # anchor pool
     ]
     with patch("monitor.site_search._fetch", side_effect=side_effect):
-        matches, truncated, error = search_sites_by_name("lousville ohio river")
+        candidates, capped, error = search_sites_by_name("lousville ohio river")
     assert error == ""
-    assert matches[0]["number"] == "03294500"
+    assert candidates[0]["number"] == "03294500"
 
 
 def test_disjoint_keywords_rank_rarest_keyword_first():
@@ -179,9 +189,9 @@ def test_disjoint_keywords_rank_rarest_keyword_first():
         ([upper1, upper2, upper3], ""),             # OR pool: UPPER (commoner)
     ]
     with patch("monitor.site_search._fetch", side_effect=side_effect):
-        matches, truncated, error = search_sites_by_name("mcalpine upper", limit=25)
+        candidates, capped, error = search_sites_by_name("mcalpine upper")
     assert error == ""
-    numbers = [m["number"] for m in matches]
+    numbers = [m["number"] for m in candidates]
     assert "03293551" in numbers  # the McAlpine gauge surfaces (was 0 results)
     # Both McAlpine (rarer-keyword) sites rank ahead of every UPPER-only site.
     assert numbers.index("03293551") < numbers.index("111")
@@ -195,23 +205,15 @@ def test_no_matches_returns_empty():
         ([], ""),  # existence token 2
     ]
     with patch("monitor.site_search._fetch", side_effect=side_effect):
-        matches, truncated, error = search_sites_by_name("zzzz qqqq")
-    assert matches == []
-    assert truncated is False
+        candidates, capped, error = search_sites_by_name("zzzz qqqq")
+    assert candidates == []
+    assert capped is False
     assert error == ""
 
 
 def test_api_error_propagates():
     with patch("monitor.site_search._fetch",
                return_value=([], "USGS search failed. Please try again later.")):
-        matches, truncated, error = search_sites_by_name("ohio")
-    assert matches == []
+        candidates, capped, error = search_sites_by_name("ohio")
+    assert candidates == []
     assert "failed" in error.lower()
-
-
-def test_truncated_when_more_candidates_than_limit():
-    feats = [_feature(str(i), f"MILL CREEK {i:02d}") for i in range(30)]
-    with patch("monitor.site_search._fetch", return_value=(feats, "")):
-        matches, truncated, error = search_sites_by_name("mill creek", limit=25)
-    assert len(matches) == 25
-    assert truncated is True
