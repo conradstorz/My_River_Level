@@ -63,6 +63,18 @@ def test_noaa_failure_still_returns_usgs_rows():
     assert err == "" and [r["number"] for r in rows] == ["03293551"]
 
 
+def test_usgs_failure_still_returns_noaa_rows():
+    # Symmetric best-effort: USGS fails, NOAA succeeds -> NOAA-discovered row.
+    def _usgs_fail(*a, **k):
+        return ([], False, "USGS search failed. Please try again later.")
+    with patch("monitor.gauge_discovery.search_sites_by_name", side_effect=_usgs_fail), \
+         patch("monitor.gauge_discovery.search_noaa_gauges_by_name", side_effect=_noaa), \
+         patch("monitor.gauge_discovery.fetch_gauge_metadata", side_effect=_meta):
+        rows, noaa_only, capped, err = combined_site_matches("mcalpine upper")
+    assert err == "" and [r["number"] for r in rows] == ["03293551"]
+    assert rows[0]["noaa_name"] == "McAlpine Upper"
+
+
 def test_both_sources_fail_surfaces_error():
     def _usgs_fail(*a, **k):
         return ([], False, "USGS search failed. Please try again later.")
