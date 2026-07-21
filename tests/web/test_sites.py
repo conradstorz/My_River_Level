@@ -3,6 +3,17 @@ from unittest.mock import patch
 import pandas as pd
 from db.models import init_db, get_db
 from web.app import create_app
+from monitor import search_cache
+
+
+@pytest.fixture(autouse=True)
+def _clear_search_cache():
+    # The paging cache is a module-global TTL store; reset it between tests so
+    # one test's cached pool can't satisfy another test's mocked search.
+    search_cache.clear()
+    yield
+    search_cache.clear()
+
 
 @pytest.fixture
 def client(tmp_db):
@@ -145,6 +156,14 @@ def test_get_search_no_matches_flashes(client):
     with patch("web.routes.combined_site_matches", return_value=([], 0, False, "")):
         resp = client.get("/sites/search?q=zzzz", follow_redirects=True)
     assert b"No gauges found" in resp.data
+
+
+def test_get_search_empty_query_flashes_without_calling_search(client):
+    with patch("web.routes.combined_site_matches") as m:
+        resp = client.get("/sites/search?q=%20%20", follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"Enter a gauge name" in resp.data
+    m.assert_not_called()
 
 
 def test_get_search_error_flashes(client):
