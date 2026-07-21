@@ -72,7 +72,9 @@ def _fetch(where, cap):
 
 def _to_match(feat):
     """Convert an ArcGIS feature to a match dict, or None if unusable."""
-    attrs = (feat or {}).get("attributes") or {}
+    if not isinstance(feat, dict):
+        return None
+    attrs = feat.get("attributes") or {}
     lid = attrs.get("gaugelid")
     if not lid:
         return None

@@ -27,6 +27,15 @@ def test_to_match_shape_and_skips_missing_lid():
         "lid": "MLUK2", "name": "McAlpine Upper",
         "waterbody": "Ohio River", "state": "KY"}
     assert _to_match({"attributes": {"location": "x"}}) is None
+    assert _to_match("not a dict") is None       # malformed item, no raise
+    assert _to_match(None) is None
+
+
+def test_search_reports_capped_when_count_reaches_cap():
+    feats = [_feat(f"L{i}", f"CREEK {i}") for i in range(3)]
+    with patch("monitor.noaa_search.requests.get", return_value=_resp(feats)):
+        _cands, capped, err = search_noaa_gauges_by_name("creek", cap=3)
+    assert capped is True and err == ""
 
 
 def test_search_ranks_noaa_name_match():
