@@ -82,6 +82,7 @@ def fetch_gauge_metadata(identifier, timeout=TIMEOUT):
     return {
         "station_name": data.get("name", identifier),
         "lid": data.get("lid", identifier),
+        "usgs_id": data.get("usgsId"),
         **thresholds,
     }
 
