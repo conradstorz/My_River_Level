@@ -18,9 +18,10 @@ Called from the web UI's /sites/search route.
 
 import logging
 import re
-from difflib import SequenceMatcher
 
 import requests
+
+from monitor.search_text import _STATE_ABBR, _tokenize, _score
 
 logger = logging.getLogger(__name__)
 
@@ -33,22 +34,6 @@ _SITE_TYPES = "site_type_code IN ('ST','LK')"  # Stream, Lake/Reservoir
 _TIMEOUT_SECONDS = 15
 _FETCH_CAP = 300  # candidate pool size to rank locally
 
-# Single-word US state names -> the abbreviation USGS uses at the end of names.
-# Multi-word states (e.g. "new york") are intentionally omitted; type "ny".
-_STATE_ABBR = {
-    "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR",
-    "CALIFORNIA": "CA", "COLORADO": "CO", "CONNECTICUT": "CT", "DELAWARE": "DE",
-    "FLORIDA": "FL", "GEORGIA": "GA", "HAWAII": "HI", "IDAHO": "ID",
-    "ILLINOIS": "IL", "INDIANA": "IN", "IOWA": "IA", "KANSAS": "KS",
-    "KENTUCKY": "KY", "LOUISIANA": "LA", "MAINE": "ME", "MARYLAND": "MD",
-    "MASSACHUSETTS": "MA", "MICHIGAN": "MI", "MINNESOTA": "MN",
-    "MISSISSIPPI": "MS", "MISSOURI": "MO", "MONTANA": "MT", "NEBRASKA": "NE",
-    "NEVADA": "NV", "OHIO": "OH", "OKLAHOMA": "OK", "OREGON": "OR",
-    "PENNSYLVANIA": "PA", "TENNESSEE": "TN", "TEXAS": "TX", "UTAH": "UT",
-    "VERMONT": "VT", "VIRGINIA": "VA", "WASHINGTON": "WA", "WISCONSIN": "WI",
-    "WYOMING": "WY",
-}
-
 
 def _escape(text):
     """Escape a keyword for a CQL2 LIKE string literal.
@@ -57,11 +42,6 @@ def _escape(text):
     quotes so the value can't break out of the quoted literal.
     """
     return text.replace("%", "").replace("_", "").replace("'", "''")
-
-
-def _tokenize(query):
-    """Split user text into uppercase keyword tokens (>= 2 chars)."""
-    return [t for t in re.split(r"[^A-Z0-9]+", query.upper()) if len(t) >= 2]
 
 
 def _match_group(token):
@@ -111,29 +91,6 @@ def _fetch(cql, limit):
     if not isinstance(features, list):
         features = []
     return features, ""
-
-
-def _score(name, tokens):
-    """Relevance score of a station name against the query tokens.
-
-    Each token contributes up to 1.0: 1.0 for an exact substring (or a state
-    name whose abbreviation is present), otherwise the best difflib similarity
-    of the token to any single word in the name (so typos score high but not
-    perfect). Higher total = better match.
-    """
-    up = name.upper()
-    words = [w for w in re.split(r"[^A-Z0-9]+", up) if w]
-    total = 0.0
-    for t in tokens:
-        if t in up:
-            total += 1.0
-            continue
-        if t in _STATE_ABBR and f", {_STATE_ABBR[t]}" in up:
-            total += 1.0
-            continue
-        total += max((SequenceMatcher(None, t, w).ratio() for w in words),
-                     default=0.0)
-    return total
 
 
 def _to_match(feat):
