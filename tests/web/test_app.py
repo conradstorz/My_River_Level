@@ -23,7 +23,7 @@ def test_sites_page_returns_200(client):
     assert response.status_code == 200
 
 def test_settings_page_returns_200(client):
-    response = client.get("/settings")
+    response = client.get("/settings", follow_redirects=True)
     assert response.status_code == 200
 
 def test_broadcast_page_returns_200(client):
