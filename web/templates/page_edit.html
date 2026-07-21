@@ -8,9 +8,9 @@
     <div class="card">
       <div class="card-header">Gauges</div>
       <div class="card-body">
-        <form method="post" action="{{ url_for('page_search_gauges', edit_token=edit_token) }}" class="input-group mb-2">
-          <input type="text" name="gauge_name" class="form-control"
-                 placeholder="Search gauges by name (e.g. ohio river louisville)"
+        <form method="get" action="{{ url_for('page_search_gauges', edit_token=edit_token) }}" class="input-group mb-2">
+          <input type="text" name="q" class="form-control"
+                 placeholder="Search NOAA gauges by name (e.g. mcalpine upper)"
                  value="{{ gauge_query or '' }}" required>
           <button class="btn btn-secondary" type="submit">Search</button>
         </form>
@@ -18,14 +18,23 @@
         <ul class="list-group mb-2">
           {% for m in gauge_matches %}
           <li class="list-group-item d-flex justify-content-between align-items-center">
-            <span>{{ m.name }} <span class="text-muted small">({{ m.noaa_lid }})</span></span>
+            <span>{{ m.name }} <span class="text-muted small">{{ m.waterbody }} ({{ m.lid }})</span></span>
             <form method="post" action="{{ url_for('page_add_gauge', edit_token=edit_token) }}" class="m-0">
-              <input type="hidden" name="lid" value="{{ m.noaa_lid }}">
+              <input type="hidden" name="lid" value="{{ m.lid }}">
               <button class="btn btn-sm btn-primary">Add</button>
             </form>
           </li>
           {% endfor %}
         </ul>
+        {% if gauge_pages > 1 %}
+        <nav class="d-flex justify-content-between align-items-center mb-2">
+          <span class="text-muted small">Page {{ gauge_page }} of {{ gauge_pages }} · {{ gauge_total }} matches</span>
+          <div class="btn-group">
+            {% if gauge_page > 1 %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('page_search_gauges', edit_token=edit_token, q=gauge_query, page=gauge_page-1) }}">← Prev</a>{% endif %}
+            {% if gauge_page < gauge_pages %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('page_search_gauges', edit_token=edit_token, q=gauge_query, page=gauge_page+1) }}">Next →</a>{% endif %}
+          </div>
+        </nav>
+        {% endif %}
         {% endif %}
         <form method="post" action="{{ url_for('page_add_gauge', edit_token=edit_token) }}" class="input-group mb-3">
           <input type="text" name="lid" class="form-control text-uppercase"

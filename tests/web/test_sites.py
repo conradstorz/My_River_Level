@@ -3,6 +3,17 @@ from unittest.mock import patch
 import pandas as pd
 from db.models import init_db, get_db
 from web.app import create_app
+from monitor import search_cache
+
+
+@pytest.fixture(autouse=True)
+def _clear_search_cache():
+    # The paging cache is a module-global TTL store; reset it between tests so
+    # one test's cached pool can't satisfy another test's mocked search.
+    search_cache.clear()
+    yield
+    search_cache.clear()
+
 
 @pytest.fixture
 def client(tmp_db):
@@ -93,117 +104,86 @@ def test_toggle_site_active(client, tmp_db):
     assert row["active"] == 0
 
 
-def _search_result(*args, **kwargs):
-    matches = [{
-        "number": "03294500",
-        "name": "OHIO RIVER AT LOUISVILLE, KY",
-        "state": "Kentucky",
-        "site_type": "Stream",
-    }]
-    return matches, False, ""
-
-
 def _identity(matches, *args, **kwargs):
     return matches
 
 
-def test_search_renders_matches_dropdown(client):
-    with patch("web.routes.search_sites_by_name", side_effect=_search_result), \
+def _rows(n):
+    return [{"number": f"{i:08d}", "name": f"CREEK {i}", "state": "KY",
+             "site_type": "Stream", "noaa_name": None, "noaa_lid": None}
+            for i in range(n)]
+
+
+def test_get_search_page1_lists_first_25_with_pager(client):
+    pool = (_rows(30), 0, False, "")
+    with patch("web.routes.combined_site_matches", return_value=pool), \
          patch("web.routes.annotate_liveness", side_effect=_identity), \
          patch("web.routes.annotate_noaa", side_effect=_identity):
-        response = client.post("/sites/search", data={"gauge_name": "ohio river"})
-    assert response.status_code == 200
-    assert b"OHIO RIVER AT LOUISVILLE, KY" in response.data
-    assert b"03294500" in response.data
-    assert b'name="site_number"' in response.data
+        resp = client.get("/sites/search?q=creek&page=1")
+    body = resp.data.decode()
+    assert resp.status_code == 200
+    assert "CREEK 0" in body and "CREEK 24" in body
+    assert "CREEK 25" not in body            # page 2 content
+    assert "Page 1 of 2" in body
+    assert "30 matches" in body
 
 
-def test_search_no_matches_flashes(client):
-    with patch("web.routes.search_sites_by_name", return_value=([], False, "")):
-        response = client.post(
-            "/sites/search", data={"gauge_name": "zzzznotagauge"},
-            follow_redirects=True,
-        )
-    assert response.status_code == 200
-    assert b"No gauges found" in response.data
-
-
-def test_search_api_error_flashes(client):
-    with patch("web.routes.search_sites_by_name",
-               return_value=([], False, "USGS search failed. Please try again later.")):
-        response = client.post(
-            "/sites/search", data={"gauge_name": "ohio"},
-            follow_redirects=True,
-        )
-    assert response.status_code == 200
-    assert b"USGS search failed" in response.data
-
-
-def test_search_empty_query_flashes(client):
-    response = client.post(
-        "/sites/search", data={"gauge_name": "   "},
-        follow_redirects=True,
-    )
-    assert response.status_code == 200
-    assert b"Enter a gauge name" in response.data
-
-
-def test_search_truncated_shows_hint(client):
-    with patch("web.routes.search_sites_by_name",
-               return_value=(_search_result()[0], True, "")), \
+def test_get_search_page2_shows_next_rows(client):
+    pool = (_rows(30), 0, False, "")
+    with patch("web.routes.combined_site_matches", return_value=pool), \
          patch("web.routes.annotate_liveness", side_effect=_identity), \
          patch("web.routes.annotate_noaa", side_effect=_identity):
-        response = client.post("/sites/search", data={"gauge_name": "creek"})
-    assert b"25 best matches" in response.data
+        resp = client.get("/sites/search?q=creek&page=2")
+    body = resp.data.decode()
+    assert "CREEK 25" in body and "CREEK 29" in body
+    assert "Page 2 of 2" in body
 
 
-def _enriched_search(*args, **kwargs):
-    matches = [
-        {"number": "03293551", "name": "OHIO RIVER AT MCALPINE",
-         "state": "Kentucky", "site_type": "Stream"},
-        {"number": "09999999", "name": "DEAD CREEK",
-         "state": "Kentucky", "site_type": "Stream"},
-    ]
-    return matches, False, ""
+def test_get_search_renders_noaa_tag(client):
+    rows = [{"number": "03293551", "name": "OHIO R US OF MCALPINE DAM",
+             "state": "KY", "site_type": "Stream",
+             "noaa_name": "McAlpine Upper", "noaa_lid": "MLUK2"}]
+    with patch("web.routes.combined_site_matches", return_value=(rows, 2, False, "")), \
+         patch("web.routes.annotate_liveness", side_effect=_identity), \
+         patch("web.routes.annotate_noaa", side_effect=_identity):
+        resp = client.get("/sites/search?q=mcalpine+upper")
+    body = resp.data.decode()
+    assert "McAlpine Upper" in body                  # NOAA tag
+    assert "2 NOAA-only" in body                     # noaa_only note
 
 
-def _add_liveness(matches, *a, **k):
-    for m in matches:
-        if m["number"] == "03293551":
-            m.update(live=True, last_value=12.8, last_time="2026-07-19T10:15")
-        else:
-            m.update(live=False, last_value=None, last_time=None)
-    return matches
+def test_get_search_no_matches_flashes(client):
+    with patch("web.routes.combined_site_matches", return_value=([], 0, False, "")):
+        resp = client.get("/sites/search?q=zzzz", follow_redirects=True)
+    assert b"No gauges found" in resp.data
 
 
-def _add_noaa(matches, *a, **k):
-    for m in matches:
-        if m["number"] == "03293551":
-            m.update(noaa_lid="MLUK2", noaa_has_flood=True)
-        else:
-            m.update(noaa_lid=None, noaa_has_flood=False)
-    return matches
+def test_get_search_empty_query_flashes_without_calling_search(client):
+    with patch("web.routes.combined_site_matches") as m:
+        resp = client.get("/sites/search?q=%20%20", follow_redirects=True)
+    assert resp.status_code == 200
+    assert b"Enter a gauge name" in resp.data
+    m.assert_not_called()
 
 
-def test_search_renders_liveness_and_noaa_badges(client):
-    with patch("web.routes.search_sites_by_name", side_effect=_enriched_search), \
-         patch("web.routes.annotate_liveness", side_effect=_add_liveness), \
-         patch("web.routes.annotate_noaa", side_effect=_add_noaa):
-        response = client.post("/sites/search", data={"gauge_name": "ohio"})
-    assert response.status_code == 200
-    body = response.data.decode()
-    assert "OHIO RIVER AT MCALPINE" in body
-    assert "Reporting" in body          # live badge
-    assert "No recent data" in body     # dead badge
-    assert "NOAA flood forecast" in body
-    # Live gauge is sorted before the dead one.
-    assert body.index("03293551") < body.index("09999999")
+def test_get_search_error_flashes(client):
+    with patch("web.routes.combined_site_matches",
+               return_value=([], 0, False, "USGS search failed. Please try again later.")):
+        resp = client.get("/sites/search?q=x", follow_redirects=True)
+    assert b"USGS search failed" in resp.data
 
 
-def test_search_survives_enrichment_failure(client):
-    with patch("web.routes.search_sites_by_name", side_effect=_enriched_search), \
-         patch("web.routes.annotate_liveness", side_effect=Exception("boom")), \
-         patch("web.routes.annotate_noaa", side_effect=Exception("boom")):
-        response = client.post("/sites/search", data={"gauge_name": "ohio"})
-    assert response.status_code == 200
-    assert b"OHIO RIVER AT MCALPINE" in response.data  # still renders
+def test_get_search_renders_liveness_badges(client):
+    rows = [{"number": "03294500", "name": "OHIO RIVER AT LOUISVILLE, KY",
+             "state": "KY", "site_type": "Stream", "noaa_name": None, "noaa_lid": None}]
+    def _live(ms, *a, **k):
+        for m in ms:
+            m.update(live=True, last_value=63000.0, last_time="t")
+        return ms
+    with patch("web.routes.combined_site_matches", return_value=(rows, 0, False, "")), \
+         patch("web.routes.annotate_liveness", side_effect=_live), \
+         patch("web.routes.annotate_noaa", side_effect=_identity):
+        resp = client.get("/sites/search?q=ohio")
+    assert b"Reporting" in resp.data
+
+

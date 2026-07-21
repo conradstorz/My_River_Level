@@ -123,3 +123,17 @@ def test_fetch_current_stage_empty_data():
     with patch("monitor.noaa_client.requests.get", return_value=mock):
         stage = fetch_current_stage("MLUK2")
     assert stage is None
+
+
+def test_fetch_gauge_metadata_returns_usgs_id():
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.json.return_value = {
+        "lid": "MLUK2", "name": "Ohio River at McAlpine Upper",
+        "usgsId": "03293551",
+        "flood": {"categories": {"action": {"stage": 21.0}}},
+    }
+    with patch("monitor.noaa_client.requests.get", return_value=mock):
+        meta = fetch_gauge_metadata("MLUK2")
+    assert meta["usgs_id"] == "03293551"
+    assert meta["lid"] == "MLUK2"

@@ -17,10 +17,10 @@ Called from the web UI's /sites/search route.
 """
 
 import logging
-import re
-from difflib import SequenceMatcher
 
 import requests
+
+from monitor.search_text import _STATE_ABBR, _tokenize, _score
 
 logger = logging.getLogger(__name__)
 
@@ -33,22 +33,6 @@ _SITE_TYPES = "site_type_code IN ('ST','LK')"  # Stream, Lake/Reservoir
 _TIMEOUT_SECONDS = 15
 _FETCH_CAP = 300  # candidate pool size to rank locally
 
-# Single-word US state names -> the abbreviation USGS uses at the end of names.
-# Multi-word states (e.g. "new york") are intentionally omitted; type "ny".
-_STATE_ABBR = {
-    "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR",
-    "CALIFORNIA": "CA", "COLORADO": "CO", "CONNECTICUT": "CT", "DELAWARE": "DE",
-    "FLORIDA": "FL", "GEORGIA": "GA", "HAWAII": "HI", "IDAHO": "ID",
-    "ILLINOIS": "IL", "INDIANA": "IN", "IOWA": "IA", "KANSAS": "KS",
-    "KENTUCKY": "KY", "LOUISIANA": "LA", "MAINE": "ME", "MARYLAND": "MD",
-    "MASSACHUSETTS": "MA", "MICHIGAN": "MI", "MINNESOTA": "MN",
-    "MISSISSIPPI": "MS", "MISSOURI": "MO", "MONTANA": "MT", "NEBRASKA": "NE",
-    "NEVADA": "NV", "OHIO": "OH", "OKLAHOMA": "OK", "OREGON": "OR",
-    "PENNSYLVANIA": "PA", "TENNESSEE": "TN", "TEXAS": "TX", "UTAH": "UT",
-    "VERMONT": "VT", "VIRGINIA": "VA", "WASHINGTON": "WA", "WISCONSIN": "WI",
-    "WYOMING": "WY",
-}
-
 
 def _escape(text):
     """Escape a keyword for a CQL2 LIKE string literal.
@@ -57,11 +41,6 @@ def _escape(text):
     quotes so the value can't break out of the quoted literal.
     """
     return text.replace("%", "").replace("_", "").replace("'", "''")
-
-
-def _tokenize(query):
-    """Split user text into uppercase keyword tokens (>= 2 chars)."""
-    return [t for t in re.split(r"[^A-Z0-9]+", query.upper()) if len(t) >= 2]
 
 
 def _match_group(token):
@@ -113,29 +92,6 @@ def _fetch(cql, limit):
     return features, ""
 
 
-def _score(name, tokens):
-    """Relevance score of a station name against the query tokens.
-
-    Each token contributes up to 1.0: 1.0 for an exact substring (or a state
-    name whose abbreviation is present), otherwise the best difflib similarity
-    of the token to any single word in the name (so typos score high but not
-    perfect). Higher total = better match.
-    """
-    up = name.upper()
-    words = [w for w in re.split(r"[^A-Z0-9]+", up) if w]
-    total = 0.0
-    for t in tokens:
-        if t in up:
-            total += 1.0
-            continue
-        if t in _STATE_ABBR and f", {_STATE_ABBR[t]}" in up:
-            total += 1.0
-            continue
-        total += max((SequenceMatcher(None, t, w).ratio() for w in words),
-                     default=0.0)
-    return total
-
-
 def _to_match(feat):
     """Convert a GeoJSON feature to a match dict, or None if unusable."""
     if not isinstance(feat, dict):
@@ -152,15 +108,16 @@ def _to_match(feat):
     }
 
 
-def search_sites_by_name(query, limit=25):
+def search_sites_by_name(query, cap=_FETCH_CAP):
     """
     Search USGS monitoring locations by keywords, ranked best-first.
 
-    Returns (matches, truncated, error):
-      matches:   list of {number, name, state, site_type}, <= limit, ranked by
-                 relevance (most likely first)
-      truncated: True if more candidates were found than returned
-      error:     "" on success, else a human-readable message
+    Returns (candidates, capped, error):
+      candidates: the full ranked pool of {number, name, state, site_type}
+                  dicts (up to `cap`), most relevant first
+      capped:     True if the candidate pool reached `cap` (more matches may
+                  exist beyond what was fetched)
+      error:      "" on success, else a human-readable message
     """
     if not query or not query.strip():
         return [], False, "Enter a gauge name to search."
@@ -220,11 +177,11 @@ def search_sites_by_name(query, limit=25):
                                    len(e[0]["name"]), e[0]["name"]),
                 )
                 candidates = [m for m, _groups in ranked]
-                truncated = len(candidates) > limit
-                return candidates[:limit], truncated, ""
+                capped = len(candidates) >= cap
+                return candidates, capped, ""
 
     candidates = [m for m in (_to_match(f) for f in features) if m]
     candidates.sort(key=lambda m: (-_score(m["name"], tokens),
                                    len(m["name"]), m["name"]))
-    truncated = len(candidates) > limit
-    return candidates[:limit], truncated, ""
+    capped = len(candidates) >= cap
+    return candidates, capped, ""
