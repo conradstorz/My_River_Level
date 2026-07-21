@@ -18,6 +18,7 @@ from monitor.noaa_client import fetch_gauge_metadata
 from monitor.gauge_enrich import annotate_liveness, annotate_noaa
 from monitor.gauge_discovery import combined_site_matches
 from monitor.search_cache import get_or_compute
+from monitor.noaa_search import search_noaa_gauges_by_name
 
 logger = logging.getLogger(__name__)
 
@@ -483,13 +484,9 @@ def register_routes(app):
         flash(f"Gauge {meta['station_name']} added.", "success")
         return redirect(url_for("page_edit", edit_token=edit_token))
 
-    @app.route("/edit/<edit_token>/gauges/search", methods=["POST"])
+    @app.route("/edit/<edit_token>/gauges/search", methods=["GET"])
     def page_search_gauges(edit_token):
-        """POST /edit/<edit_token>/gauges/search — find NOAA gauges by name.
-
-        Runs the ranked USGS name search, keeps only results with a co-located
-        NOAA flood-forecast point, and re-renders the editor with them.
-        """
+        """GET /edit/<edit_token>/gauges/search?q=&page= — find NOAA gauges by name."""
         from flask import abort
         db_path = current_app.config["DB_PATH"]
         from db.models import (get_page_by_edit_token, get_page_gauges,
@@ -498,28 +495,34 @@ def register_routes(app):
         if not page:
             abort(404)
 
-        query = request.form.get("gauge_name", "").strip()
-        gauge_matches = []
+        query = request.args.get("q", "").strip()
+        pageno = request.args.get("page", 1, type=int)
+        if pageno < 1:
+            pageno = 1
+        gauge_matches, pages, total = [], 1, 0
         if not query:
             flash("Enter a gauge name to search.", "danger")
         else:
-            matches, _truncated, error = search_sites_by_name(query)
+            cands, _capped, error = get_or_compute(
+                f"noaa:{query.lower()}", lambda: search_noaa_gauges_by_name(query))
             if error:
                 flash(error, "danger")
+            elif not cands:
+                flash(f"No NOAA gauges found matching {query!r}.", "warning")
             else:
-                try:
-                    annotate_noaa(matches)
-                except Exception:
-                    logger.warning("NOAA enrichment failed", exc_info=True)
-                gauge_matches = [m for m in matches if m.get("noaa_has_flood")]
-                if not gauge_matches:
-                    flash(f"No NOAA gauges found matching {query!r}.", "warning")
+                per_page = 25
+                total = len(cands)
+                pages = (total + per_page - 1) // per_page
+                pageno = min(pageno, pages)
+                start = (pageno - 1) * per_page
+                gauge_matches = cands[start:start + per_page]
 
         gauges = get_page_gauges(page["id"], db_path)
         subscribers = get_active_page_subscribers(page["id"], db_path)
-        return render_template("page_edit.html", page=page, gauges=gauges,
-                              subscribers=subscribers, edit_token=edit_token,
-                              gauge_matches=gauge_matches, gauge_query=query)
+        return render_template(
+            "page_edit.html", page=page, gauges=gauges, subscribers=subscribers,
+            edit_token=edit_token, gauge_matches=gauge_matches, gauge_query=query,
+            gauge_page=pageno, gauge_pages=pages, gauge_total=total)
 
     @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
     def page_remove_gauge(edit_token):

@@ -1,6 +1,16 @@
 import pytest
 from unittest.mock import patch
 from db.models import init_db
+from monitor import search_cache
+
+
+@pytest.fixture(autouse=True)
+def _clear_search_cache():
+    # The paging cache is a module-global TTL store; reset it between tests so
+    # one test's cached pool can't satisfy another test's mocked search.
+    search_cache.clear()
+    yield
+    search_cache.clear()
 
 
 @pytest.fixture
@@ -20,46 +30,41 @@ def _make_edit_token(client):
     return edit
 
 
-def _noaa_search(*args, **kwargs):
-    matches = [
-        {"number": "03293551", "name": "OHIO RIVER AT MCALPINE",
-         "state": "Kentucky", "site_type": "Stream"},
-        {"number": "09999999", "name": "NO FORECAST CREEK",
-         "state": "Kentucky", "site_type": "Stream"},
-    ]
-    return matches, False, ""
+def _noaa_pool(*a, **k):
+    cands = [{"lid": "MLUK2", "name": "McAlpine Upper",
+              "waterbody": "Ohio River", "state": "KY"},
+             {"lid": "MLPK2", "name": "McAlpine Lower",
+              "waterbody": "Ohio River", "state": "KY"}]
+    return cands, False, ""
 
 
-def _noaa_annotate(matches, *a, **k):
-    for m in matches:
-        if m["number"] == "03293551":
-            m.update(noaa_lid="MLUK2", noaa_has_flood=True)
-        else:
-            m.update(noaa_lid=None, noaa_has_flood=False)
-    return matches
-
-
-def test_page_gauge_search_lists_only_noaa_gauges(client, tmp_db):
+def test_editor_noaa_search_lists_gauges_by_noaa_name(client):
     edit_token = _make_edit_token(client)
-    with patch("web.routes.search_sites_by_name", side_effect=_noaa_search), \
-         patch("web.routes.annotate_noaa", side_effect=_noaa_annotate):
-        resp = client.post(f"/edit/{edit_token}/gauges/search",
-                           data={"gauge_name": "ohio"})
+    with patch("web.routes.search_noaa_gauges_by_name", side_effect=_noaa_pool):
+        resp = client.get(f"/edit/{edit_token}/gauges/search?q=mcalpine+upper")
     body = resp.data.decode()
-    assert "OHIO RIVER AT MCALPINE" in body   # has NOAA forecast → shown
-    assert "NO FORECAST CREEK" not in body    # no NOAA forecast → filtered out
-    assert "MLUK2" in body
+    assert "McAlpine Upper" in body and "MLUK2" in body
 
 
-def test_page_gauge_search_survives_enrichment_failure(client, tmp_db):
-    # If annotate_noaa raises, the editor still renders (200) with no matches.
+def test_editor_noaa_search_paginates(client):
     edit_token = _make_edit_token(client)
-    with patch("web.routes.search_sites_by_name", side_effect=_noaa_search), \
-         patch("web.routes.annotate_noaa", side_effect=Exception("NWPS down")):
-        resp = client.post(f"/edit/{edit_token}/gauges/search",
-                           data={"gauge_name": "ohio"}, follow_redirects=True)
+    many = ([{"lid": f"L{i}", "name": f"GAUGE {i}", "waterbody": "R", "state": "KY"}
+             for i in range(30)], False, "")
+    with patch("web.routes.search_noaa_gauges_by_name", return_value=many):
+        resp = client.get(f"/edit/{edit_token}/gauges/search?q=gauge&page=2")
+    body = resp.data.decode()
+    assert "GAUGE 25" in body and "GAUGE 29" in body
+    assert "Page 2 of 2" in body
+
+
+def test_editor_noaa_search_survives_failure(client):
+    edit_token = _make_edit_token(client)
+    with patch("web.routes.search_noaa_gauges_by_name",
+               return_value=([], False, "NOAA search failed. Please try again later.")):
+        resp = client.get(f"/edit/{edit_token}/gauges/search?q=x",
+                          follow_redirects=True)
     assert resp.status_code == 200
-    assert b"No NOAA gauges found" in resp.data
+    assert b"NOAA search failed" in resp.data
 
 
 def _meta_ok(identifier, timeout=10):
