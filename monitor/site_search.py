@@ -17,7 +17,6 @@ Called from the web UI's /sites/search route.
 """
 
 import logging
-import re
 
 import requests
 
