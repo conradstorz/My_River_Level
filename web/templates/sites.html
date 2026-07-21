@@ -4,9 +4,9 @@
 <h1 class="mb-4">Monitored Sites</h1>
 
 <h4>Find a Gauge by Name</h4>
-<form method="post" action="/sites/search" class="row g-2 mb-1">
+<form method="get" action="/sites/search" class="row g-2 mb-1">
   <div class="col-md-8">
-    <input name="gauge_name" class="form-control"
+    <input name="q" class="form-control"
            placeholder="Keywords in any order (e.g. louisville ohio river)"
            value="{{ query or '' }}" required>
   </div>
@@ -24,7 +24,9 @@
     <tbody>
     {% for m in matches %}
       <tr>
-        <td>{{ m.name }}{% if m.state %} <span class="text-muted small">— {{ m.state }}</span>{% endif %}</td>
+        <td>{{ m.name }}{% if m.state %} <span class="text-muted small">— {{ m.state }}</span>{% endif %}
+          {% if m.noaa_name %}<span class="badge bg-info text-dark ms-1" title="Matched NOAA gauge {{ m.noaa_lid }}">matched NOAA: {{ m.noaa_name }}</span>{% endif %}
+        </td>
         <td><code>{{ m.number }}</code></td>
         <td>
           {% if m.live %}
@@ -54,9 +56,19 @@
     {% endfor %}
     </tbody>
   </table>
-  {% if truncated %}
-  <small class="text-muted">Showing the 25 best matches — add more keywords to narrow it down.</small>
+  {% if pages > 1 %}
+  <nav class="d-flex justify-content-between align-items-center">
+    <span class="text-muted small">Page {{ page }} of {{ pages }} · {{ total }} matches</span>
+    <div class="btn-group">
+      {% if page > 1 %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('search_sites', q=query, page=page-1) }}">← Prev</a>{% endif %}
+      {% if page < pages %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('search_sites', q=query, page=page+1) }}">Next →</a>{% endif %}
+    </div>
+  </nav>
+  {% else %}
+  <span class="text-muted small">{{ total }} match{{ '' if total == 1 else 'es' }}</span>
   {% endif %}
+  {% if capped %}<div><small class="text-muted">Showing the best {{ total }} — add more keywords to narrow it down.</small></div>{% endif %}
+  {% if noaa_only %}<div><small class="text-muted">+ {{ noaa_only }} NOAA-only gauge{{ '' if noaa_only == 1 else 's' }} matched — add those via a landing page.</small></div>{% endif %}
 </div>
 {% endif %}
 

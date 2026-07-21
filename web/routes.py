@@ -16,6 +16,8 @@ from monitor.site_search import search_sites_by_name
 from monitor.phone_utils import normalize_e164
 from monitor.noaa_client import fetch_gauge_metadata
 from monitor.gauge_enrich import annotate_liveness, annotate_noaa
+from monitor.gauge_discovery import combined_site_matches
+from monitor.search_cache import get_or_compute
 
 logger = logging.getLogger(__name__)
 
@@ -306,40 +308,43 @@ def register_routes(app):
         flash(f"Site {site_number} ({usgs_name}) added.", "success")
         return redirect(url_for("sites"))
 
-    @app.route("/sites/search", methods=["POST"])
+    @app.route("/sites/search", methods=["GET"])
     def search_sites():
-        """POST /sites/search — search USGS gauges by name.
-
-        Requires a gauge name; on error or no matches, flashes a message and
-        redirects to the sites page. Otherwise re-renders the sites page with
-        the ranked matches and a truncation flag.
-        """
+        """GET /sites/search?q=&page= — paginated USGS+NOAA gauge search."""
         db_path = current_app.config["DB_PATH"]
-        query = request.form.get("gauge_name", "").strip()
+        query = request.args.get("q", "").strip()
         if not query:
             flash("Enter a gauge name to search.", "danger")
             return redirect(url_for("sites"))
+        page = request.args.get("page", 1, type=int)
+        if page < 1:
+            page = 1
 
-        candidates, capped, error = search_sites_by_name(query)
+        rows, noaa_only, capped, error = get_or_compute(
+            f"sites:{query.lower()}", lambda: combined_site_matches(query))
         if error:
             flash(error, "danger")
             return redirect(url_for("sites"))
-        if not candidates:
+        if not rows:
             flash(f"No gauges found matching {query!r}.", "warning")
             return redirect(url_for("sites"))
 
-        matches = candidates[:25]
-        # Best-effort enrichment — never let it break search.
+        per_page = 25
+        total = len(rows)
+        pages = (total + per_page - 1) // per_page
+        page = min(page, pages)
+        start = (page - 1) * per_page
+        page_rows = rows[start:start + per_page]
+
         try:
-            annotate_liveness(matches)
+            annotate_liveness(page_rows)
         except Exception:
             logger.warning("Liveness enrichment failed", exc_info=True)
         try:
-            annotate_noaa(matches)
+            annotate_noaa(page_rows)
         except Exception:
             logger.warning("NOAA enrichment failed", exc_info=True)
-        # Stable sort: live gauges first, relevance order preserved within.
-        matches.sort(key=lambda m: 0 if m.get("live") else 1)
+        page_rows.sort(key=lambda m: 0 if m.get("live") else 1)
 
         conn = get_db(db_path)
         cur = conn.cursor()
@@ -348,12 +353,9 @@ def register_routes(app):
         cur.close()
         conn.close()
         return render_template(
-            "sites.html",
-            sites=all_sites,
-            matches=matches,
-            query=query,
-            truncated=capped,
-        )
+            "sites.html", sites=all_sites, matches=page_rows, query=query,
+            page=page, pages=pages, total=total, capped=capped,
+            noaa_only=noaa_only)
 
     @app.route("/sites/<int:site_id>/toggle", methods=["POST"])
     def toggle_site(site_id):
