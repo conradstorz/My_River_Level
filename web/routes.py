@@ -22,24 +22,56 @@ from monitor.noaa_search import search_noaa_gauges_by_name
 
 logger = logging.getLogger(__name__)
 
-SETTINGS_FIELDS = [
-    ("poll_interval_minutes", "Poll Interval (minutes)", "number"),
-    ("low_percentile", "Low Flow Percentile", "number"),
-    ("high_percentile", "High Flow Percentile", "number"),
-    ("very_low_percentile", "Very Low Percentile", "number"),
-    ("very_high_percentile", "Very High Percentile", "number"),
-    ("reminder_low_high_hours", "Reminder Interval: LOW/HIGH (hours)", "number"),
-    ("reminder_severe_hours", "Reminder Interval: SEVERE (hours)", "number"),
-    ("historical_start_year", "Historical Start Year", "number"),
-    ("search_radius_miles", "Search Radius (miles)", "number"),
-    ("telegram_bot_token", "Telegram Bot Token", "password"),
-    ("twilio_account_sid", "Twilio Account SID", "text"),
-    ("twilio_auth_token", "Twilio Auth Token", "password"),
-    ("twilio_sms_number", "Twilio SMS Number", "text"),
-    ("twilio_whatsapp_number", "Twilio WhatsApp Number", "text"),
-    ("facebook_page_token", "Facebook Page Token", "password"),
-    ("facebook_verify_token", "Facebook Verify Token", "text"),
+SETTINGS_GROUPS = [
+    {
+        "slug": "monitoring",
+        "title": "Monitoring",
+        "sections": [
+            {"subtitle": None, "fields": [
+                ("poll_interval_minutes", "Poll Interval (minutes)", "number"),
+                ("historical_start_year", "Historical Start Year", "number"),
+                ("search_radius_miles", "Search Radius (miles)", "number"),
+            ]},
+        ],
+    },
+    {
+        "slug": "thresholds",
+        "title": "Alert Thresholds",
+        "sections": [
+            {"subtitle": None, "fields": [
+                ("low_percentile", "Low Flow Percentile", "number"),
+                ("high_percentile", "High Flow Percentile", "number"),
+                ("very_low_percentile", "Very Low Percentile", "number"),
+                ("very_high_percentile", "Very High Percentile", "number"),
+                ("reminder_low_high_hours", "Reminder Interval: LOW/HIGH (hours)", "number"),
+                ("reminder_severe_hours", "Reminder Interval: SEVERE (hours)", "number"),
+            ]},
+        ],
+    },
+    {
+        "slug": "channels",
+        "title": "Notification Channels",
+        "sections": [
+            {"subtitle": "Telegram", "fields": [
+                ("telegram_bot_token", "Telegram Bot Token", "password"),
+            ]},
+            {"subtitle": "Twilio (SMS / WhatsApp)", "fields": [
+                ("twilio_account_sid", "Twilio Account SID", "text"),
+                ("twilio_auth_token", "Twilio Auth Token", "password"),
+                ("twilio_sms_number", "Twilio SMS Number", "text"),
+                ("twilio_whatsapp_number", "Twilio WhatsApp Number", "text"),
+            ]},
+            {"subtitle": "Facebook Messenger", "fields": [
+                ("facebook_page_token", "Facebook Page Token", "password"),
+                ("facebook_verify_token", "Facebook Verify Token", "text"),
+            ]},
+        ],
+    },
 ]
+
+# Flattened view — kept so the old module-level name still resolves.
+SETTINGS_FIELDS = [f for g in SETTINGS_GROUPS
+                   for s in g["sections"] for f in s["fields"]]
 
 
 def register_routes(app):
@@ -383,22 +415,32 @@ def register_routes(app):
         flash("Site removed.", "success")
         return redirect(url_for("sites"))
 
-    @app.route("/settings", methods=["GET", "POST"])
+    @app.route("/settings")
     def settings():
-        """GET|POST /settings — view or save runtime settings.
+        """GET /settings — redirect to the first settings sub-page."""
+        return redirect(url_for("settings_group", slug=SETTINGS_GROUPS[0]["slug"]))
 
-        POST persists every field in ``SETTINGS_FIELDS`` and redirects; GET
-        renders the form pre-filled with current values.
+    @app.route("/settings/<slug>", methods=["GET", "POST"])
+    def settings_group(slug):
+        """GET|POST /settings/<slug> — view or save one group of settings.
+
+        GET renders the group's sections plus the tab nav. POST persists only
+        this group's fields and redirects back to the same tab. Unknown slug → 404.
         """
+        from flask import abort
+        group = next((g for g in SETTINGS_GROUPS if g["slug"] == slug), None)
+        if not group:
+            abort(404)
         db_path = current_app.config["DB_PATH"]
+        keys = [f[0] for s in group["sections"] for f in s["fields"]]
         if request.method == "POST":
-            for key, _, _ in SETTINGS_FIELDS:
-                value = request.form.get(key, "")
-                set_setting(key, value, db_path)
+            for key in keys:
+                set_setting(key, request.form.get(key, ""), db_path)
             flash("Settings saved.", "success")
-            return redirect(url_for("settings"))
-        current = {key: get_setting(key, db_path, default="") for key, _, _ in SETTINGS_FIELDS}
-        return render_template("settings.html", fields=SETTINGS_FIELDS, current=current)
+            return redirect(url_for("settings_group", slug=slug))
+        current = {key: get_setting(key, db_path, default="") for key in keys}
+        return render_template("settings.html", groups=SETTINGS_GROUPS,
+                               active=group, current=current)
 
     @app.route("/pages/new", methods=["GET", "POST"])
     def page_new():

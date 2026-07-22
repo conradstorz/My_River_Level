@@ -1,19 +1,29 @@
 {% extends "base.html" %}
-{% block title %}Settings{% endblock %}
+{% block title %}Settings — {{ active.title }}{% endblock %}
 {% block content %}
 <h1 class="mb-4">Settings</h1>
-<form method="post" action="/settings">
-  {% for key, label, input_type in fields %}
-  <div class="mb-3 row">
-    <label class="col-sm-4 col-form-label">{{ label }}</label>
-    <div class="col-sm-6">
-      <input type="{{ input_type }}" name="{{ key }}"
-             value="{{ current[key] }}"
-             class="form-control"
-             {% if input_type == "password" %}autocomplete="new-password"{% endif %}>
-    </div>
-  </div>
+<ul class="nav nav-tabs mb-4">
+  {% for g in groups %}
+  <li class="nav-item">
+    <a class="nav-link {% if g.slug == active.slug %}active{% endif %}"
+       href="{{ url_for('settings_group', slug=g.slug) }}">{{ g.title }}</a>
+  </li>
   {% endfor %}
-  <button type="submit" class="btn btn-primary">Save Settings</button>
+</ul>
+<form method="post" action="{{ url_for('settings_group', slug=active.slug) }}">
+  {% for section in active.sections %}
+    {% if section.subtitle %}<h5 class="mt-4 mb-3">{{ section.subtitle }}</h5>{% endif %}
+    {% for key, label, input_type in section.fields %}
+    <div class="mb-3 row">
+      <label class="col-sm-4 col-form-label">{{ label }}</label>
+      <div class="col-sm-6">
+        <input type="{{ input_type }}" name="{{ key }}"
+               value="{{ current[key] }}" class="form-control"
+               {% if input_type == 'password' %}autocomplete="new-password"{% endif %}>
+      </div>
+    </div>
+    {% endfor %}
+  {% endfor %}
+  <button type="submit" class="btn btn-primary">Save {{ active.title }}</button>
 </form>
 {% endblock %}
