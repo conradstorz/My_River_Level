@@ -197,12 +197,22 @@ def score_gauge(gauge, db_path=None):
             detail=("NOAA publishes no flood-stage thresholds for this gauge, "
                     "so it cannot tell you when flooding starts."),
         )
-    elif not publishes_forecast:
+    elif not publishes_forecast and gauge.get("has_forecast") is False:
         result.update(
             grade="D",
             headline="Observation only",
             detail=("This gauge reports current levels but NOAA publishes no "
                     "forecast for it, so you get no advance warning."),
+        )
+    elif not publishes_forecast:
+        # We have no forecast on file but NOAA has never told us there isn't
+        # one — the gauge was just added, or the last check failed. Saying
+        # "publishes no forecast" here would be a confident false statement.
+        result.update(
+            grade="Unrated",
+            headline="Not yet assessed",
+            detail=("We have not yet retrieved a forecast for this gauge. "
+                    "Check back after the next forecast update."),
         )
     elif not reporting:
         result.update(

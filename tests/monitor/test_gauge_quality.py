@@ -54,8 +54,13 @@ def test_gauge_without_flood_categories_grades_f(tmp_db):
 # -- Rubric branch 2: no forecast published ---------------------------------
 
 def test_gauge_without_forecast_grades_d(tmp_db):
-    gauge = _gauge(tmp_db)
+    from db.models import set_gauge_forecast_availability, get_all_noaa_gauges
+    _gauge(tmp_db)
     record_noaa_observation("abcd1", 11.0, _now() - timedelta(hours=1), tmp_db)
+    # The D grade asserts NOAA publishes no forecast, so it may only apply
+    # once NOAA has actually told us so.
+    set_gauge_forecast_availability("abcd1", False, tmp_db)
+    gauge = [g for g in get_all_noaa_gauges(tmp_db) if g["lid"] == "abcd1"][0]
     result = score_gauge(gauge, tmp_db)
     assert result["grade"] == "D"
     assert result["headline"] == "Observation only"
@@ -201,8 +206,50 @@ def test_score_all_gauges_persists_grade_and_wording(tmp_db):
 
 
 def test_score_all_gauges_persists_observation_only_wording(tmp_db):
+    from db.models import set_gauge_forecast_availability
+    _gauge(tmp_db)
+    set_gauge_forecast_availability("abcd1", False, tmp_db)
+    assert score_all_gauges(tmp_db) == 1
+    stored = get_gauge_quality("abcd1", tmp_db)
+    assert stored["grade"] == "D"
+    assert "Observation only" in stored["detail"]
+
+
+def test_score_all_gauges_does_not_claim_missing_forecast_before_checking(tmp_db):
+    """An unchecked gauge persists as Unrated, never as 'Observation only'."""
     _gauge(tmp_db)
     assert score_all_gauges(tmp_db) == 1
     stored = get_gauge_quality("abcd1", tmp_db)
-    assert stored["grade"] == "D"  # no forecast archived yet
-    assert "Observation only" in stored["detail"]
+    assert stored["grade"] == "Unrated"
+    assert "Observation only" not in stored["detail"]
+
+
+# ── Never assert "no forecast" when we simply haven't checked yet ──
+
+def _gauge_with_thresholds(tmp_db, lid="abcd1"):
+    from db.models import get_or_create_noaa_gauge, get_all_noaa_gauges, record_noaa_observation
+    get_or_create_noaa_gauge(lid, "Test Gauge", 10.0, 12.0, 14.0, 16.0, tmp_db)
+    record_noaa_observation(lid, 9.0, db_path=tmp_db)
+    return [g for g in get_all_noaa_gauges(tmp_db) if g["lid"] == lid][0]
+
+
+def test_unchecked_gauge_is_unrated_not_observation_only(tmp_db):
+    """A gauge we have never successfully checked must not be told it has no forecast."""
+    from monitor.gauge_quality import score_gauge
+    gauge = _gauge_with_thresholds(tmp_db)
+    result = score_gauge(gauge, tmp_db)
+    assert result["grade"] == "Unrated"
+    assert "not yet" in result["detail"].lower()
+    assert "publishes no" not in result["detail"].lower()
+
+
+def test_gauge_confirmed_without_forecast_is_observation_only(tmp_db):
+    """Once NOAA confirms there is no forecast, the D grade is correct."""
+    from db.models import set_gauge_forecast_availability, get_all_noaa_gauges
+    from monitor.gauge_quality import score_gauge
+    _gauge_with_thresholds(tmp_db)
+    set_gauge_forecast_availability("abcd1", False, tmp_db)
+    gauge = [g for g in get_all_noaa_gauges(tmp_db) if g["lid"] == "abcd1"][0]
+    result = score_gauge(gauge, tmp_db)
+    assert result["grade"] == "D"
+    assert result["headline"] == "Observation only"

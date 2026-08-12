@@ -189,29 +189,62 @@ def _extract_issued_at(payload):
     return None
 
 
-def fetch_forecast(lid, timeout=TIMEOUT):
+def fetch_forecast_result(lid, timeout=TIMEOUT):
     """
-    Fetch the published stage forecast for `lid` from NWPS.
+    Fetch `lid`'s forecast and say *why* there isn't one when there isn't.
 
-    Returns ``{"issued_at": datetime, "points": [{"valid_at": datetime,
-    "stage": float}, ...]}`` with timezone-aware datetimes, or None on any
-    error or when the gauge publishes no forecast. Readings missing a usable
-    time or stage are skipped rather than failing the whole fetch. When the
-    payload carries no issue time we fall back to "now", since the archive
-    scores points by ``valid_at - issued_at``.
+    Returns ``{"status": ..., "forecast": dict | None}`` where status is:
+
+    ``"ok"``
+        A forecast was retrieved; ``forecast`` holds it.
+    ``"none"``
+        NOAA answered authoritatively that this gauge has no forecast — an
+        HTTP 404, or a 200 carrying an empty series.
+    ``"error"``
+        We could not find out: a network failure, a 5xx, or an unparseable
+        payload.
+
+    The distinction matters because the portal grades gauges. Treating an
+    outage as "publishes no forecast" would tell a user their gauge gives no
+    advance warning when in fact we simply failed to ask.
     """
     if not isinstance(lid, str) or not lid.strip():
-        return None
+        return {"status": "error", "forecast": None}
     try:
         url = f"{NWPS_BASE}/gauges/{lid.lower()}/stageflow/forecast"
         resp = requests.get(url, timeout=timeout)
-        if resp.status_code != 200:
-            logger.warning("NOAA forecast fetch failed for %s: HTTP %s",
-                           lid, resp.status_code)
-            return None
-        payload = resp.json()
     except Exception:
         logger.exception("Error fetching NOAA forecast for %s", lid)
+        return {"status": "error", "forecast": None}
+
+    if resp.status_code == 404:
+        logger.info("NOAA publishes no forecast for %s (HTTP 404)", lid)
+        return {"status": "none", "forecast": None}
+    if resp.status_code != 200:
+        logger.warning("NOAA forecast fetch failed for %s: HTTP %s",
+                       lid, resp.status_code)
+        return {"status": "error", "forecast": None}
+
+    forecast = _parse_forecast_payload(lid, resp)
+    if forecast is None:
+        return {"status": "error", "forecast": None}
+    if not forecast["points"]:
+        logger.info("NOAA returned an empty forecast series for %s", lid)
+        return {"status": "none", "forecast": None}
+    return {"status": "ok", "forecast": forecast}
+
+
+def _parse_forecast_payload(lid, resp):
+    """Turn a 200 forecast response into {"issued_at", "points"}, or None.
+
+    None means the payload could not be understood at all. An understood
+    payload that simply carries no readings returns an empty ``points`` list —
+    callers must treat those two cases differently.
+    """
+    try:
+        payload = resp.json()
+    except Exception:
+        logger.exception("Unparseable NOAA forecast payload for %s", lid)
         return None
 
     try:
@@ -231,9 +264,20 @@ def fetch_forecast(lid, timeout=TIMEOUT):
         logger.exception("Error parsing NOAA forecast for %s", lid)
         return None
 
-    if not points:
-        logger.info("NOAA publishes no forecast points for %s", lid)
-        return None
-
     issued_at = _extract_issued_at(payload) or datetime.now(timezone.utc)
     return {"issued_at": issued_at, "points": points}
+
+
+def fetch_forecast(lid, timeout=TIMEOUT):
+    """
+    Fetch the published stage forecast for `lid` from NWPS.
+
+    Returns ``{"issued_at": datetime, "points": [{"valid_at": datetime,
+    "stage": float}, ...]}`` with timezone-aware datetimes, or None on any
+    error or when the gauge publishes no forecast. Readings missing a usable
+    time or stage are skipped rather than failing the whole fetch.
+
+    Use :func:`fetch_forecast_result` when you need to tell "NOAA has no
+    forecast" apart from "we could not reach NOAA".
+    """
+    return fetch_forecast_result(lid, timeout=timeout)["forecast"]

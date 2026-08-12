@@ -244,3 +244,54 @@ def test_fetch_forecast_network_error_returns_none():
 
 def test_fetch_forecast_none_lid_returns_none():
     assert fetch_forecast(None) is None
+
+
+# ── fetch_forecast_result: distinguishing "no forecast" from "couldn't check" ──
+
+def test_fetch_forecast_result_reports_none_on_http_404(mocker):
+    """A 404 means NOAA genuinely publishes no forecast for this gauge."""
+    from monitor.noaa_client import fetch_forecast_result
+    resp = mocker.Mock(status_code=404)
+    mocker.patch("monitor.noaa_client.requests.get", return_value=resp)
+    result = fetch_forecast_result("abcd1")
+    assert result["status"] == "none"
+    assert result["forecast"] is None
+
+
+def test_fetch_forecast_result_reports_none_on_empty_series(mocker):
+    """A 200 with an empty series also means no forecast is published."""
+    from monitor.noaa_client import fetch_forecast_result
+    resp = mocker.Mock(status_code=200)
+    resp.json.return_value = {"data": []}
+    mocker.patch("monitor.noaa_client.requests.get", return_value=resp)
+    assert fetch_forecast_result("abcd1")["status"] == "none"
+
+
+def test_fetch_forecast_result_reports_error_on_network_failure(mocker):
+    """A network failure is 'unknown', never 'no forecast published'."""
+    from monitor.noaa_client import fetch_forecast_result
+    mocker.patch("monitor.noaa_client.requests.get",
+                 side_effect=OSError("connection reset"))
+    result = fetch_forecast_result("abcd1")
+    assert result["status"] == "error"
+    assert result["forecast"] is None
+
+
+def test_fetch_forecast_result_reports_error_on_http_503(mocker):
+    """A 503 is NOAA being down, not a statement about the gauge."""
+    from monitor.noaa_client import fetch_forecast_result
+    resp = mocker.Mock(status_code=503)
+    mocker.patch("monitor.noaa_client.requests.get", return_value=resp)
+    assert fetch_forecast_result("abcd1")["status"] == "error"
+
+
+def test_fetch_forecast_result_returns_ok_with_points(mocker):
+    from monitor.noaa_client import fetch_forecast_result
+    resp = mocker.Mock(status_code=200)
+    resp.json.return_value = {
+        "data": [{"validTime": "2026-08-13T12:00:00Z", "primary": 15.5}]
+    }
+    mocker.patch("monitor.noaa_client.requests.get", return_value=resp)
+    result = fetch_forecast_result("abcd1")
+    assert result["status"] == "ok"
+    assert len(result["forecast"]["points"]) == 1

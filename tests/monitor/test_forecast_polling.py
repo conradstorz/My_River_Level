@@ -23,8 +23,8 @@ def _payload(issued, stage=15.0, hours=24):
 def test_poll_archives_forecast_points_and_scores_the_gauge(tmp_db):
     get_or_create_noaa_gauge("abcd1", "Test", 10.0, 12.0, 14.0, 16.0, tmp_db)
     issued = _issued()
-    with patch("monitor.forecast_polling.fetch_forecast",
-               return_value=_payload(issued)) as mock_fetch:
+    with patch("monitor.forecast_polling.fetch_forecast_result",
+               return_value={"status": "ok", "forecast": _payload(issued)}) as mock_fetch:
         ForecastPollingThread(db_path=tmp_db)._poll()
 
     assert mock_fetch.call_args[0][0] == "abcd1"
@@ -36,15 +36,32 @@ def test_poll_archives_forecast_points_and_scores_the_gauge(tmp_db):
     assert "Not reporting" in quality["detail"]  # no observations recorded yet
 
 
-def test_poll_handles_a_gauge_with_no_forecast(tmp_db):
+def test_poll_handles_a_gauge_noaa_confirms_has_no_forecast(tmp_db):
+    """A definite 'none' from NOAA is what earns the Observation-only grade."""
     get_or_create_noaa_gauge("abcd1", "Test", 10.0, 12.0, 14.0, 16.0, tmp_db)
-    with patch("monitor.forecast_polling.fetch_forecast", return_value=None):
+    with patch("monitor.forecast_polling.fetch_forecast_result",
+               return_value={"status": "none", "forecast": None}):
         ForecastPollingThread(db_path=tmp_db)._poll()
 
     assert get_forecast_points("abcd1", tmp_db) == []
     quality = get_gauge_quality("abcd1", tmp_db)
     assert quality["grade"] == "D"
     assert "Observation only" in quality["detail"]
+
+
+def test_poll_does_not_blame_the_gauge_when_the_fetch_errors(tmp_db):
+    """An NWPS outage must leave has_forecast NULL, not assert 'no forecast'."""
+    from db.models import get_all_noaa_gauges
+    get_or_create_noaa_gauge("abcd1", "Test", 10.0, 12.0, 14.0, 16.0, tmp_db)
+    with patch("monitor.forecast_polling.fetch_forecast_result",
+               return_value={"status": "error", "forecast": None}):
+        ForecastPollingThread(db_path=tmp_db)._poll()
+
+    gauge = [g for g in get_all_noaa_gauges(tmp_db) if g["lid"] == "abcd1"][0]
+    assert gauge["has_forecast"] is None
+    quality = get_gauge_quality("abcd1", tmp_db)
+    assert quality["grade"] == "Unrated"
+    assert "Observation only" not in quality["detail"]
 
 
 def test_poll_continues_after_one_gauge_raises(tmp_db):
@@ -55,9 +72,9 @@ def test_poll_continues_after_one_gauge_raises(tmp_db):
     def flaky(lid):
         if lid == "aaaa1":
             raise RuntimeError("NWPS exploded")
-        return _payload(issued)
+        return {"status": "ok", "forecast": _payload(issued)}
 
-    with patch("monitor.forecast_polling.fetch_forecast", side_effect=flaky):
+    with patch("monitor.forecast_polling.fetch_forecast_result", side_effect=flaky):
         ForecastPollingThread(db_path=tmp_db)._poll()
 
     assert get_forecast_points("aaaa1", tmp_db) == []

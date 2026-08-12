@@ -11,9 +11,10 @@ after the moment it described has passed.
 import logging
 import threading
 
-from db.models import get_all_noaa_gauges, get_setting, record_forecast_points
+from db.models import (get_all_noaa_gauges, get_setting, record_forecast_points,
+                       set_gauge_forecast_availability)
 from monitor.gauge_quality import score_all_gauges
-from monitor.noaa_client import fetch_forecast
+from monitor.noaa_client import fetch_forecast_result
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,14 @@ class ForecastPollingThread(threading.Thread):
         for gauge in gauges:
             lid = gauge["lid"]
             try:
-                forecast = fetch_forecast(lid)
+                result = fetch_forecast_result(lid)
+                # Only a definite answer updates has_forecast. On "error" we
+                # leave it NULL so the grade stays "not yet assessed" instead
+                # of claiming NOAA publishes no forecast for this gauge.
+                if result["status"] in ("ok", "none"):
+                    set_gauge_forecast_availability(
+                        lid, result["status"] == "ok", self.db_path)
+                forecast = result["forecast"]
                 if not forecast:
                     continue
                 stored = record_forecast_points(lid, forecast["issued_at"],

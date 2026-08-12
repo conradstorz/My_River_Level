@@ -160,6 +160,12 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS quality_grade TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS quality_detail TEXT NOT NULL DEFAULT ''",
     "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS quality_checked_at TIMESTAMPTZ",
+    # Tri-state on purpose: TRUE = NOAA publishes a forecast, FALSE = NOAA
+    # confirmed it does not, NULL = we have never successfully checked. Never
+    # collapse NULL into FALSE — that would tell users a gauge has no forecast
+    # when all we really had was a failed HTTP request.
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS has_forecast BOOLEAN",
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS forecast_checked_at TIMESTAMPTZ",
     "CREATE INDEX IF NOT EXISTS idx_site_conditions_site_id ON site_conditions (site_id, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_notifications_site_trigger ON notifications (site_id, trigger_type, id DESC)",
 ]
@@ -689,6 +695,29 @@ def get_forecast_points(lid, db_path=None):
         cur.close()
         conn.close()
     return [dict(r) for r in rows]
+
+
+def set_gauge_forecast_availability(lid, has_forecast, db_path=None):
+    """Record whether NOAA publishes a forecast for `lid`.
+
+    Pass True when a forecast was retrieved and False only when NOAA
+    positively answered that there is none. Never call this after a failed
+    request — leaving the column NULL is what lets the portal say "not yet
+    assessed" instead of wrongly claiming the gauge has no forecast.
+    """
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """UPDATE noaa_gauges
+               SET has_forecast=%s, forecast_checked_at=NOW()
+               WHERE lid=%s""",
+            (bool(has_forecast), lid)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
 
 
 def set_gauge_quality(lid, grade, detail, db_path=None):
