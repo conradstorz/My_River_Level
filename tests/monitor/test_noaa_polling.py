@@ -63,3 +63,63 @@ def test_polling_thread_no_enqueue_on_no_change(tmp_db):
     with patch("monitor.noaa_polling.fetch_current_stage", return_value=15.0):
         thread._poll()
     assert q.empty()
+
+
+def test_successful_fetch_records_an_observation(tmp_db):
+    """Every good stage reading is archived so forecasts can be scored later."""
+    from db.models import get_noaa_observations
+    init_db(tmp_db)
+    get_or_create_noaa_gauge("MLUK2", "Ohio River at McAlpine Upper", 21.0, 23.0, 30.0, 38.0, tmp_db)
+    with patch("monitor.noaa_polling.fetch_current_stage", return_value=15.5):
+        fetch_and_evaluate_noaa_gauge(_gauge("Normal"), tmp_db)
+    observations = get_noaa_observations("MLUK2", tmp_db)
+    assert [o["stage"] for o in observations] == [15.5]
+
+
+def test_observation_recorded_even_without_a_transition(tmp_db):
+    from db.models import get_noaa_observations
+    init_db(tmp_db)
+    get_or_create_noaa_gauge("MLUK2", "Ohio River at McAlpine Upper", 21.0, 23.0, 30.0, 38.0, tmp_db)
+    with patch("monitor.noaa_polling.fetch_current_stage", return_value=22.0):
+        result = fetch_and_evaluate_noaa_gauge(_gauge("Action"), tmp_db)
+    assert result is None
+    assert len(get_noaa_observations("MLUK2", tmp_db)) == 1
+
+
+def test_failed_fetch_records_no_observation(tmp_db):
+    from db.models import get_noaa_observations
+    init_db(tmp_db)
+    get_or_create_noaa_gauge("MLUK2", "Ohio River at McAlpine Upper", 21.0, 23.0, 30.0, 38.0, tmp_db)
+    with patch("monitor.noaa_polling.fetch_current_stage", return_value=None):
+        fetch_and_evaluate_noaa_gauge(_gauge("Normal"), tmp_db)
+    assert get_noaa_observations("MLUK2", tmp_db) == []
+
+
+def test_noaa_polling_thread_survives_a_failing_poll(tmp_db):
+    """A Postgres blip must not permanently stop NOAA polling."""
+    import threading
+    import time
+    from unittest.mock import MagicMock
+
+    init_db(tmp_db)
+    calls = []
+    stop_event = threading.Event()
+    thread = NoaaPollingThread(MagicMock(), db_path=tmp_db, stop_event=stop_event)
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("database went away")
+
+    thread._poll = flaky
+    thread.DEFAULT_INTERVAL_MINUTES = 0
+    with patch("monitor.noaa_polling.get_setting", return_value="0"):
+        thread.start()
+        deadline = time.time() + 5
+        while len(calls) < 2 and time.time() < deadline:
+            time.sleep(0.01)
+        assert thread.is_alive()
+        assert len(calls) >= 2
+        stop_event.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
