@@ -33,6 +33,13 @@ DEFAULT_SETTINGS = {
     "twilio_whatsapp_number": "",
     "facebook_page_token": "",
     "facebook_verify_token": "",
+    "facebook_app_secret": "",
+    "rate_change_threshold_ft": "2.0",
+    "rate_change_threshold_pct": "25",
+    "rate_change_window_hours": "6",
+    "rate_change_min_interval_hours": "6",
+    "site_stale_hours": "6",
+    "forecast_poll_hours": "6",
 }
 
 SCHEMA_STATEMENTS = [
@@ -121,6 +128,40 @@ SCHEMA_STATEMENTS = [
         opted_in_at TEXT NOT NULL DEFAULT (NOW()::TEXT),
         UNIQUE(page_id, channel, channel_id)
     )""",
+    """CREATE TABLE IF NOT EXISTS page_sites (
+        page_id INTEGER NOT NULL REFERENCES user_pages(id),
+        site_id INTEGER NOT NULL REFERENCES sites(id),
+        PRIMARY KEY (page_id, site_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS noaa_observations (
+        id SERIAL PRIMARY KEY,
+        lid TEXT NOT NULL,
+        observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        stage DOUBLE PRECISION NOT NULL,
+        UNIQUE (lid, observed_at)
+    )""",
+    """CREATE TABLE IF NOT EXISTS gauge_forecasts (
+        id SERIAL PRIMARY KEY,
+        lid TEXT NOT NULL,
+        issued_at TIMESTAMPTZ NOT NULL,
+        valid_at TIMESTAMPTZ NOT NULL,
+        predicted_stage DOUBLE PRECISION NOT NULL,
+        UNIQUE (lid, issued_at, valid_at)
+    )""",
+]
+
+# Additive-only changes applied to tables that already exist in production.
+# Every statement must be safe to re-run and must never drop or rewrite an
+# existing column; init_db runs these after SCHEMA_STATEMENTS on every start.
+MIGRATION_STATEMENTS = [
+    "ALTER TABLE sites ADD COLUMN IF NOT EXISTS last_success_at TIMESTAMPTZ",
+    "ALTER TABLE sites ADD COLUMN IF NOT EXISTS last_error TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE sites ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ",
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS quality_grade TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS quality_detail TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS quality_checked_at TIMESTAMPTZ",
+    "CREATE INDEX IF NOT EXISTS idx_site_conditions_site_id ON site_conditions (site_id, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_notifications_site_trigger ON notifications (site_id, trigger_type, id DESC)",
 ]
 
 
@@ -136,11 +177,13 @@ def get_db(db_path=None):
 
 
 def init_db(db_path=None):
-    """Create all tables and seed default settings."""
+    """Create all tables, apply additive migrations, and seed default settings."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         for stmt in SCHEMA_STATEMENTS:
+            cur.execute(stmt)
+        for stmt in MIGRATION_STATEMENTS:
             cur.execute(stmt)
         for key, value in DEFAULT_SETTINGS.items():
             cur.execute(
@@ -415,3 +458,268 @@ def get_page_subscribers_for_gauge(gauge_id, db_path=None):
         cur.close()
         conn.close()
     return [dict(r) for r in rows]
+
+
+def link_page_site(page_id, site_id, db_path=None):
+    """Link a USGS site to a page (insert into page_sites); a no-op if already linked."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "INSERT INTO page_sites (page_id, site_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (page_id, site_id)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def unlink_page_site(page_id, site_id, db_path=None):
+    """Remove the link between a page and a USGS site (delete from page_sites)."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DELETE FROM page_sites WHERE page_id=%s AND site_id=%s",
+            (page_id, site_id)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_page_sites(page_id, db_path=None):
+    """Return all sites rows linked to a page, as a list of dicts."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT s.* FROM sites s
+               JOIN page_sites ps ON ps.site_id = s.id
+               WHERE ps.page_id=%s
+               ORDER BY s.id""",
+            (page_id,)
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_pages_for_site(site_id, db_path=None):
+    """Return all active pages that include this USGS site."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT up.* FROM user_pages up
+               JOIN page_sites ps ON ps.page_id = up.id
+               WHERE ps.site_id=%s AND up.active=1
+               ORDER BY up.id""",
+            (site_id,)
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_page_subscribers_for_site(site_id, db_path=None):
+    """Return all active page_subscribers for every active page linked to this site."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT ps.* FROM page_subscribers ps
+               JOIN page_sites pst ON pst.page_id = ps.page_id
+               JOIN user_pages up ON up.id = ps.page_id
+               WHERE pst.site_id=%s AND ps.status='active' AND up.active=1
+               ORDER BY ps.id""",
+            (site_id,)
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def record_site_fetch_success(site_id, db_path=None):
+    """Stamp a successful USGS fetch for `site_id` and clear the stored error."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE sites SET last_success_at=NOW(), last_error='', last_error_at=NULL WHERE id=%s",
+            (site_id,)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def record_site_fetch_error(site_id, message, db_path=None):
+    """Record why the most recent USGS fetch for `site_id` produced no reading."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE sites SET last_error=%s, last_error_at=NOW() WHERE id=%s",
+            (str(message), site_id)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_sites_with_health(db_path=None):
+    """Return every site with last_success_at/last_error plus a `stale` flag.
+
+    `stale` is True when the site has never reported successfully or its last
+    successful fetch is older than the `site_stale_hours` setting.
+    """
+    stale_hours = float(get_setting("site_stale_hours", db_path, default="6"))
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT *,
+                      (last_success_at IS NULL
+                       OR last_success_at < NOW() - (%s * INTERVAL '1 hour')) AS stale
+               FROM sites ORDER BY id""",
+            (stale_hours,)
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def record_noaa_observation(lid, stage, observed_at=None, db_path=None):
+    """Store an observed NOAA stage; a duplicate (lid, observed_at) is ignored."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        if observed_at is None:
+            cur.execute(
+                """INSERT INTO noaa_observations (lid, stage) VALUES (%s, %s)
+                   ON CONFLICT (lid, observed_at) DO NOTHING""",
+                (lid, stage)
+            )
+        else:
+            cur.execute(
+                """INSERT INTO noaa_observations (lid, observed_at, stage)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (lid, observed_at) DO NOTHING""",
+                (lid, observed_at, stage)
+            )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_noaa_observations(lid, db_path=None):
+    """Return every stored observation for `lid`, oldest first."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT lid, observed_at, stage FROM noaa_observations
+               WHERE lid=%s ORDER BY observed_at""",
+            (lid,)
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def record_forecast_points(lid, issued_at, points, db_path=None):
+    """Archive forecast points for `lid` issued at `issued_at`.
+
+    `points` is a list of dicts with keys "valid_at" (datetime) and "stage"
+    (float). Returns the number of rows actually inserted; points already
+    archived for the same (lid, issued_at, valid_at) are ignored.
+    """
+    inserted = 0
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        for point in points:
+            cur.execute(
+                """INSERT INTO gauge_forecasts (lid, issued_at, valid_at, predicted_stage)
+                   VALUES (%s, %s, %s, %s)
+                   ON CONFLICT (lid, issued_at, valid_at) DO NOTHING""",
+                (lid, issued_at, point["valid_at"], point["stage"])
+            )
+            inserted += cur.rowcount
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return inserted
+
+
+def get_forecast_points(lid, db_path=None):
+    """Return every archived forecast point for `lid`, oldest issue first."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT lid, issued_at, valid_at, predicted_stage FROM gauge_forecasts
+               WHERE lid=%s ORDER BY issued_at, valid_at""",
+            (lid,)
+        )
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+def set_gauge_quality(lid, grade, detail, db_path=None):
+    """Store the flood-prediction quality grade and explanation for a NOAA gauge."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """UPDATE noaa_gauges
+               SET quality_grade=%s, quality_detail=%s, quality_checked_at=NOW()
+               WHERE lid=%s""",
+            (grade, detail, lid)
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def get_gauge_quality(lid, db_path=None):
+    """Return {grade, detail, checked_at} for a gauge, or None if never scored."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "SELECT quality_grade, quality_detail, quality_checked_at FROM noaa_gauges WHERE lid=%s",
+            (lid,)
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+    if row is None or not row["quality_grade"]:
+        return None
+    return {
+        "grade": row["quality_grade"],
+        "detail": row["quality_detail"],
+        "checked_at": str(row["quality_checked_at"]) if row["quality_checked_at"] else "",
+    }
