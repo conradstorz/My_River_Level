@@ -1,7 +1,29 @@
+import base64
+
 import pytest
 from unittest.mock import patch
-from db.models import init_db
+from twilio.request_validator import RequestValidator
+from db.models import init_db, set_setting
 from monitor import search_cache
+
+# The portal is behind HTTP Basic auth; the /admin routes below need it.
+ADMIN_AUTH = "Basic " + base64.b64encode(b"admin:testpass").decode()
+
+TWILIO_TOKEN = "test-auth-token"
+
+
+def _twilio_post(client, path, data):
+    """POST to a Twilio webhook with a real X-Twilio-Signature.
+
+    The signature is computed by Twilio's own RequestValidator, so the request
+    exercises the production verification path rather than bypassing it.
+    """
+    db_path = client.application.config["DB_PATH"]
+    set_setting("twilio_auth_token", TWILIO_TOKEN, db_path)
+    signature = RequestValidator(TWILIO_TOKEN).compute_signature(
+        "http://localhost" + path, data
+    )
+    return client.post(path, data=data, headers={"X-Twilio-Signature": signature})
 
 
 @pytest.fixture(autouse=True)
@@ -14,12 +36,16 @@ def _clear_search_cache():
 
 
 @pytest.fixture
-def client(tmp_db):
+def client(tmp_db, monkeypatch):
+    monkeypatch.setenv("ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "testpass")
+    monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     init_db(tmp_db)
     from web.app import create_app
     app = create_app(db_path=tmp_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
+        c.environ_base["HTTP_AUTHORIZATION"] = ADMIN_AUTH
         yield c
 
 
@@ -286,8 +312,8 @@ def test_twilio_pause_page_subscriber(client):
     page = get_page_by_public_token(pub, db_path)
     add_page_subscriber(page["id"], "sms", "+15025551234", "Alice", db_path)
 
-    resp = client.post("/webhook/twilio",
-                       data={"From": "+15025551234", "Body": "PAUSE", "To": "+18005550000"})
+    resp = _twilio_post(client, "/webhook/twilio",
+                        {"From": "+15025551234", "Body": "PAUSE", "To": "+18005550000"})
     assert resp.status_code == 200
     conn = get_db(db_path)
     cur = conn.cursor()
@@ -309,8 +335,8 @@ def test_twilio_resume_page_subscriber(client):
     add_page_subscriber(page["id"], "sms", "+15025551234", "Bob", db_path)
     set_page_subscriber_status(page["id"], "sms", "+15025551234", "paused", db_path)
 
-    resp = client.post("/webhook/twilio",
-                       data={"From": "+15025551234", "Body": "RESUME", "To": "+18005550000"})
+    resp = _twilio_post(client, "/webhook/twilio",
+                        {"From": "+15025551234", "Body": "RESUME", "To": "+18005550000"})
     assert resp.status_code == 200
     conn = get_db(db_path)
     cur = conn.cursor()
@@ -331,8 +357,8 @@ def test_twilio_stop_also_updates_page_subscribers(client):
     page = get_page_by_public_token(pub, db_path)
     add_page_subscriber(page["id"], "sms", "+15025551234", "Carol", db_path)
 
-    resp = client.post("/webhook/twilio",
-                       data={"From": "+15025551234", "Body": "STOP", "To": "+18005550000"})
+    resp = _twilio_post(client, "/webhook/twilio",
+                        {"From": "+15025551234", "Body": "STOP", "To": "+18005550000"})
     assert resp.status_code == 200
     conn = get_db(db_path)
     cur = conn.cursor()

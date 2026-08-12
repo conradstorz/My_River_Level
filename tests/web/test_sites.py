@@ -1,9 +1,14 @@
+import base64
+
 import pytest
 from unittest.mock import patch
 import pandas as pd
 from db.models import init_db, get_db
 from web.app import create_app
 from monitor import search_cache
+
+# The portal is behind HTTP Basic auth; these tests hit protected routes.
+ADMIN_AUTH = "Basic " + base64.b64encode(b"admin:testpass").decode()
 
 
 @pytest.fixture(autouse=True)
@@ -16,11 +21,15 @@ def _clear_search_cache():
 
 
 @pytest.fixture
-def client(tmp_db):
+def client(tmp_db, monkeypatch):
+    monkeypatch.setenv("ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "testpass")
+    monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     init_db(tmp_db)
     app = create_app(db_path=tmp_db)
     app.config["TESTING"] = True
     with app.test_client() as c:
+        c.environ_base["HTTP_AUTHORIZATION"] = ADMIN_AUTH
         yield c
 
 def test_sites_page_lists_sites(client, tmp_db):

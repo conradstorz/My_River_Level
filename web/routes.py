@@ -4,11 +4,22 @@ Defines every HTTP route for the management portal (dashboard, sites,
 subscribers, settings, broadcast, admin), the public landing pages
 (create/view/edit/subscribe), and the inbound Twilio and Facebook
 webhooks. All routes are attached to the app by ``register_routes(app)``.
+
+The webhook routes are exempt from the portal's Basic auth (see
+``web/auth.py``) because the providers cannot supply credentials. They are
+authenticated instead by the provider's request signature, verified by
+:func:`verify_facebook_signature` and :func:`verify_twilio_signature`. Both
+fail closed: an unconfigured secret rejects every request rather than
+accepting them all.
 """
 
+import hashlib
+import hmac
+import json
 import logging
 
 from flask import render_template, current_app, request, redirect, url_for, flash
+from twilio.request_validator import RequestValidator
 from db.models import get_db, get_setting, set_setting
 from version import VERSION, RELEASE_DATE
 from monitor.site_validation import validate_usgs_site
@@ -21,6 +32,47 @@ from monitor.search_cache import get_or_compute
 from monitor.noaa_search import search_noaa_gauges_by_name
 
 logger = logging.getLogger(__name__)
+
+
+def verify_facebook_signature(raw_body, db_path):
+    """Return True when `raw_body` carries a valid X-Hub-Signature-256 header.
+
+    Facebook signs the exact bytes it POSTed with the app secret. An empty
+    ``facebook_app_secret`` setting returns False — an unsigned webhook must
+    never be able to enroll subscribers.
+    """
+    app_secret = (get_setting("facebook_app_secret", db_path, default="") or "").strip()
+    if not app_secret:
+        logger.warning("Rejecting Facebook webhook: facebook_app_secret is not set")
+        return False
+    header = request.headers.get("X-Hub-Signature-256", "")
+    expected = "sha256=" + hmac.new(
+        app_secret.encode("utf-8"), raw_body, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(header, expected):
+        logger.warning("Rejecting Facebook webhook: signature mismatch")
+        return False
+    return True
+
+
+def verify_twilio_signature(db_path):
+    """Return True when the current request carries a valid X-Twilio-Signature.
+
+    Uses Twilio's own ``RequestValidator`` against the full request URL and
+    form parameters. An empty ``twilio_auth_token`` setting returns False.
+    """
+    auth_token = (get_setting("twilio_auth_token", db_path, default="") or "").strip()
+    if not auth_token:
+        logger.warning("Rejecting Twilio webhook: twilio_auth_token is not set")
+        return False
+    signature = request.headers.get("X-Twilio-Signature", "")
+    if not RequestValidator(auth_token).validate(
+        request.url, request.form.to_dict(), signature
+    ):
+        logger.warning("Rejecting Twilio webhook: signature mismatch for %s", request.path)
+        return False
+    return True
+
 
 SETTINGS_GROUPS = [
     {
@@ -178,11 +230,16 @@ def register_routes(app):
         out, and ``PAUSE``/``RESUME`` toggle page-subscriber status. Both the
         ``subscribers`` and ``page_subscribers`` tables are updated
         independently. Returns an empty TwiML response.
+
+        Rejects the request with 403 unless it carries a valid
+        ``X-Twilio-Signature``.
         """
+        db_path = current_app.config["DB_PATH"]
+        if not verify_twilio_signature(db_path):
+            return "Forbidden", 403
         from_number = request.form.get("From", "")
         body = request.form.get("Body", "").strip().upper()
         to_number = request.form.get("To", "")
-        db_path = current_app.config["DB_PATH"]
         wa_number = get_setting("twilio_whatsapp_number", db_path)
         channel = "whatsapp" if wa_number and wa_number in to_number else "sms"
         clean_from = from_number.replace("whatsapp:", "")
@@ -239,7 +296,12 @@ def register_routes(app):
 
         Error 30034 = US A2P 10DLC campaign not registered — requires
         registering the sending number with an A2P campaign in Twilio console.
+
+        Rejects the request with 403 unless it carries a valid
+        ``X-Twilio-Signature``.
         """
+        if not verify_twilio_signature(current_app.config["DB_PATH"]):
+            return "Forbidden", 403
         msg_sid = request.form.get("MessageSid", "")
         msg_status = request.form.get("MessageStatus", "")
         error_code = request.form.get("ErrorCode", "")
@@ -263,8 +325,9 @@ def register_routes(app):
         """GET|POST /webhook/facebook — verify the webhook and handle inbound messages.
 
         On GET, echoes ``hub.challenge`` when ``hub.mode`` is ``subscribe`` and
-        the verify token matches (else 403). On POST, opts in any sender whose
-        message is ``JOIN`` and returns ``OK``.
+        the verify token matches (else 403). On POST, verifies the
+        ``X-Hub-Signature-256`` header against the raw body (else 403), then
+        opts in any sender whose message is ``JOIN`` and returns ``OK``.
         """
         db_path = current_app.config["DB_PATH"]
         if request.method == "GET":
@@ -275,7 +338,18 @@ def register_routes(app):
             if mode == "subscribe" and token == verify_token:
                 return challenge, 200
             return "Forbidden", 403
-        data = request.get_json(force=True, silent=True) or {}
+        # Read the body once — the signature covers these exact bytes, so the
+        # payload must be parsed from the same buffer that was verified.
+        raw_body = request.get_data()
+        if not verify_facebook_signature(raw_body, db_path):
+            return "Forbidden", 403
+        try:
+            data = json.loads(raw_body or b"{}")
+        except (ValueError, TypeError):
+            logger.warning("Facebook webhook body was not valid JSON")
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
         for entry in data.get("entry", []):
             for event in entry.get("messaging", []):
                 psid = event.get("sender", {}).get("id")
