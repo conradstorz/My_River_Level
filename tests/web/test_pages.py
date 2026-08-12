@@ -369,3 +369,131 @@ def test_twilio_stop_also_updates_page_subscribers(client):
     cur.close()
     conn.close()
     assert row["status"] == "unsubscribed"
+
+
+# --- USGS river gauges attached to a landing page -------------------------
+
+def _anon(client):
+    """A client for the same app that sends no Authorization header.
+
+    The /edit/<token> family is authenticated by the unguessable token in the
+    URL, not by the portal's Basic auth, so these routes must work for a page
+    owner who has no admin password.
+    """
+    return client.application.test_client()
+
+
+_VALID_USGS = (True, "OHIO RIVER AT LOUISVILLE, KY", "")
+
+
+def test_page_add_site_links_site_to_page_without_admin_auth(client):
+    from db.models import get_page_by_edit_token, get_page_sites
+    db_path = client.application.config["DB_PATH"]
+    edit = _make_edit_token(client)
+    page = get_page_by_edit_token(edit, db_path)
+    with patch("web.routes.validate_usgs_site", return_value=_VALID_USGS):
+        resp = _anon(client).post(f"/edit/{edit}/sites/add",
+                                  data={"site_number": "03294500",
+                                        "parameter_code": "00065"},
+                                  follow_redirects=True)
+    assert resp.status_code == 200
+    sites = get_page_sites(page["id"], db_path)
+    assert [s["site_number"] for s in sites] == ["03294500"]
+
+
+def test_page_add_site_rejects_invalid_site_number(client):
+    from db.models import get_page_by_edit_token, get_page_sites
+    db_path = client.application.config["DB_PATH"]
+    edit = _make_edit_token(client)
+    page = get_page_by_edit_token(edit, db_path)
+    with patch("web.routes.validate_usgs_site",
+               return_value=(False, "", "Site not found")):
+        resp = _anon(client).post(f"/edit/{edit}/sites/add",
+                                  data={"site_number": "99999999"},
+                                  follow_redirects=True)
+    assert resp.status_code == 200
+    assert get_page_sites(page["id"], db_path) == []
+
+
+def test_page_edit_lists_linked_usgs_sites(client):
+    from db.models import get_page_by_edit_token
+    edit = _make_edit_token(client)
+    with patch("web.routes.validate_usgs_site", return_value=_VALID_USGS):
+        _anon(client).post(f"/edit/{edit}/sites/add",
+                           data={"site_number": "03294500", "parameter_code": "00065"})
+    body = _anon(client).get(f"/edit/{edit}").data.decode()
+    assert "03294500" in body
+    assert "OHIO RIVER AT LOUISVILLE, KY" in body
+
+
+def test_page_remove_site_unlinks_it_without_admin_auth(client):
+    from db.models import get_page_by_edit_token, get_page_sites
+    db_path = client.application.config["DB_PATH"]
+    edit = _make_edit_token(client)
+    page = get_page_by_edit_token(edit, db_path)
+    with patch("web.routes.validate_usgs_site", return_value=_VALID_USGS):
+        _anon(client).post(f"/edit/{edit}/sites/add",
+                           data={"site_number": "03294500", "parameter_code": "00065"})
+    site_id = get_page_sites(page["id"], db_path)[0]["id"]
+    resp = _anon(client).post(f"/edit/{edit}/sites/remove",
+                              data={"site_id": site_id}, follow_redirects=True)
+    assert resp.status_code == 200
+    assert get_page_sites(page["id"], db_path) == []
+
+
+def test_page_add_site_unknown_token_404s(client):
+    with patch("web.routes.validate_usgs_site", return_value=_VALID_USGS):
+        resp = _anon(client).post("/edit/doesnotexist/sites/add",
+                                  data={"site_number": "03294500"})
+    assert resp.status_code == 404
+
+
+# --- flood-prediction grade ----------------------------------------------
+
+def _page_with_gauge(client, name="River Watch", lid="MLUK2"):
+    from db.models import (create_user_page, get_page_by_public_token,
+                           get_or_create_noaa_gauge, link_page_gauge)
+    db_path = client.application.config["DB_PATH"]
+    pub, edit = create_user_page(name, db_path)
+    page = get_page_by_public_token(pub, db_path)
+    gid = get_or_create_noaa_gauge(lid, "Ohio River at McAlpine Upper",
+                                   21.0, 23.0, 30.0, 38.0, db_path)
+    link_page_gauge(page["id"], gid, db_path)
+    return pub, edit
+
+
+def test_view_page_shows_gauge_grade_headline_and_detail(client):
+    from db.models import set_gauge_quality
+    from monitor.gauge_quality import HEADLINE_SEPARATOR
+    db_path = client.application.config["DB_PATH"]
+    pub, _ = _page_with_gauge(client)
+    set_gauge_quality(
+        "MLUK2", "B",
+        "Good" + HEADLINE_SEPARATOR +
+        "24-hour forecasts are off by 0.82 ft on average (14 forecasts checked).",
+        db_path)
+    body = _anon(client).get(f"/view/{pub}").data.decode()
+    assert ">B<" in body
+    assert "Good" in body
+    assert "off by 0.82 ft on average" in body
+
+
+def test_view_page_shows_unrated_for_a_gauge_that_was_never_scored(client):
+    pub, _ = _page_with_gauge(client)
+    body = _anon(client).get(f"/view/{pub}").data.decode()
+    assert "Unrated" in body
+    assert "not yet assessed" in body.lower()
+
+
+def test_edit_page_shows_gauge_grade(client):
+    from db.models import set_gauge_quality
+    from monitor.gauge_quality import HEADLINE_SEPARATOR
+    db_path = client.application.config["DB_PATH"]
+    _pub, edit = _page_with_gauge(client)
+    set_gauge_quality("MLUK2", "F",
+                      "Not reporting" + HEADLINE_SEPARATOR +
+                      "No readings in the last 24 hours.",
+                      db_path)
+    body = _anon(client).get(f"/edit/{edit}").data.decode()
+    assert ">F<" in body
+    assert "No readings in the last 24 hours." in body

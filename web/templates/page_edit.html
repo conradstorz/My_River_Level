@@ -6,7 +6,7 @@
 <div class="row g-4">
   <div class="col-md-6">
     <div class="card">
-      <div class="card-header">Gauges</div>
+      <div class="card-header">Flood gauges (NOAA)</div>
       <div class="card-body">
         <form method="get" action="{{ url_for('page_search_gauges', edit_token=edit_token) }}" class="input-group mb-2">
           <input type="text" name="q" class="form-control"
@@ -44,17 +44,67 @@
         {% if gauges %}
         <ul class="list-group list-group-flush">
           {% for g in gauges %}
+          <li class="list-group-item">
+            <div class="d-flex justify-content-between align-items-start">
+              <span>{{ g.station_name }} <span class="text-muted small">({{ g.lid }})</span></span>
+              <form method="post" action="{{ url_for('page_remove_gauge', edit_token=edit_token) }}" class="m-0">
+                <input type="hidden" name="gauge_id" value="{{ g.id }}">
+                <button class="btn btn-sm btn-outline-danger">Remove</button>
+              </form>
+            </div>
+            {% with q = g.quality %}{% include "_gauge_quality.html" %}{% endwith %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted mb-0">No gauges yet. Enter a NOAA gauge ID above.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header">River gauges (USGS)</div>
+      <div class="card-body">
+        <p class="text-muted small">
+          These are the USGS gauges this page watches. Anyone subscribed below
+          gets an alert when one of them changes condition or rises or falls
+          quickly.
+        </p>
+        <form method="post" action="{{ url_for('page_add_site', edit_token=edit_token) }}" class="row g-2 mb-3">
+          <div class="col-7">
+            <input type="text" name="site_number" class="form-control"
+                   placeholder="USGS site number (e.g. 03294500)" required>
+          </div>
+          <div class="col-5">
+            <div class="input-group">
+              <select name="parameter_code" class="form-select">
+                <option value="00065">Gage height (ft)</option>
+                <option value="00060">Discharge (cfs)</option>
+              </select>
+              <button class="btn btn-primary" type="submit">Add</button>
+            </div>
+          </div>
+        </form>
+        {% if sites %}
+        <ul class="list-group list-group-flush">
+          {% for s in sites %}
           <li class="list-group-item d-flex justify-content-between align-items-center">
-            <span>{{ g.station_name }} <span class="text-muted small">({{ g.lid }})</span></span>
-            <form method="post" action="{{ url_for('page_remove_gauge', edit_token=edit_token) }}" class="m-0">
-              <input type="hidden" name="gauge_id" value="{{ g.id }}">
+            <span>{{ s.station_name or s.site_number }}
+              <span class="text-muted small">(#{{ s.site_number }} ·
+                {{ "Discharge" if s.parameter_code == "00060" else "Gage height" }})</span>
+            </span>
+            <form method="post" action="{{ url_for('page_remove_site', edit_token=edit_token) }}" class="m-0">
+              <input type="hidden" name="site_id" value="{{ s.id }}">
               <button class="btn btn-sm btn-outline-danger">Remove</button>
             </form>
           </li>
           {% endfor %}
         </ul>
         {% else %}
-        <p class="text-muted mb-0">No gauges yet. Enter a NOAA gauge ID above.</p>
+        <p class="text-muted mb-0">
+          No river gauges yet. Add a USGS site number above and this page's
+          subscribers will start getting its alerts.
+        </p>
         {% endif %}
       </div>
     </div>

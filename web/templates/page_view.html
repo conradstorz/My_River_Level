@@ -26,6 +26,9 @@
         {% if g.last_polled_at %}<span class="text-muted small">(as of {{ g.last_polled_at }})</span>{% endif %}
       </p>
       {% endif %}
+      <div class="text-start mt-3">
+        {% with q = g.quality %}{% include "_gauge_quality.html" %}{% endwith %}
+      </div>
     </div>
     <div class="card-footer text-end">
       <a href="https://water.noaa.gov/gauges/{{ g.lid | lower }}" target="_blank" class="btn btn-sm btn-outline-secondary">

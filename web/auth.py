@@ -46,6 +46,8 @@ PUBLIC_ENDPOINTS = frozenset({
     "page_add_gauge",
     "page_search_gauges",
     "page_remove_gauge",
+    "page_add_site",
+    "page_remove_site",
     "page_subscribe",
     "page_unsubscribe",
 })

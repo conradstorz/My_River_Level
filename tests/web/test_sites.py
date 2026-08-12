@@ -196,3 +196,47 @@ def test_get_search_renders_liveness_badges(client):
     assert b"Reporting" in resp.data
 
 
+
+
+def test_sites_page_flags_a_site_that_has_never_reported(client, tmp_db):
+    """A site with no successful fetch must be visibly flagged, not silently listed."""
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO sites (site_number, station_name) VALUES ('03293600', 'Dead Gauge')")
+    conn.commit()
+    cur.close()
+    conn.close()
+    body = client.get("/sites").data.decode()
+    assert "Dead Gauge" in body
+    assert "Not reporting" in body
+
+
+def test_sites_page_shows_last_error_as_tooltip(client, tmp_db):
+    """The reason a site is not reporting is available on hover."""
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO sites (site_number, station_name, last_error)
+           VALUES ('03292494', 'Broken Gauge', 'No matching parameter column')"""
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    body = client.get("/sites").data.decode()
+    assert "No matching parameter column" in body
+
+
+def test_sites_page_does_not_flag_a_healthy_site(client, tmp_db):
+    """A site that reported recently shows as reporting, with no warning badge."""
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute(
+        """INSERT INTO sites (site_number, station_name, last_success_at)
+           VALUES ('03294500', 'Live Gauge', NOW())"""
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    body = client.get("/sites").data.decode()
+    assert "Live Gauge" in body
+    assert "Not reporting" not in body

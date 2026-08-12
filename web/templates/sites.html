@@ -87,13 +87,22 @@
 
 {% if sites %}
 <table class="table table-striped">
-  <thead><tr><th>Site #</th><th>Station Name</th><th>Parameter</th><th>Status</th><th>Actions</th></tr></thead>
+  <thead><tr><th>Site #</th><th>Station Name</th><th>Parameter</th><th>Data</th><th>Monitoring</th><th>Actions</th></tr></thead>
   <tbody>
   {% for s in sites %}
   <tr>
     <td><code>{{ s.site_number }}</code></td>
     <td>{{ s.station_name or "—" }}</td>
     <td>{{ "Discharge" if s.parameter_code == "00060" else "Gage height" }}</td>
+    <td>
+      {% if s.stale %}
+        <span class="badge bg-danger"
+              title="{{ s.last_error or 'No readings have been received from USGS for this site yet.' }}">⚠ Not reporting</span>
+      {% else %}
+        <span class="badge bg-success"
+              title="Last good reading: {{ s.last_success_at }}">Reporting</span>
+      {% endif %}
+    </td>
     <td>
       <form method="post" action="/sites/{{ s.id }}/toggle" style="display:inline">
         <button class="btn btn-sm {{ 'btn-success' if s.active else 'btn-outline-secondary' }}">

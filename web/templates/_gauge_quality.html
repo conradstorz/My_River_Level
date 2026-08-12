@@ -1,0 +1,16 @@
+{#
+  Plain-English judgement of how well a NOAA gauge predicts flooding.
+
+  Expects `q`, the dict built by web.routes.gauge_quality_view(): a letter
+  grade (or "Unrated"), a Bootstrap badge colour, a headline verdict, and a
+  sentence explaining it. "Unrated" is the normal state for a gauge we have
+  not collected enough forecasts for yet, so it is styled calmly in grey.
+#}
+<div class="mt-2 small">
+  <div class="text-muted text-uppercase" style="letter-spacing:.04em">Flood-prediction quality</div>
+  <div class="d-flex align-items-center gap-2 mt-1">
+    <span class="badge {{ q.badge_class }}">{{ q.grade }}</span>
+    <strong>{{ q.headline }}</strong>
+  </div>
+  <div class="text-muted mt-1">{{ q.detail }}</div>
+</div>
