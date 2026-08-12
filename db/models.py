@@ -443,14 +443,19 @@ def get_active_page_subscribers(page_id, db_path=None):
 
 
 def get_page_subscribers_for_gauge(gauge_id, db_path=None):
-    """Return all active page_subscribers for every page linked to this gauge."""
+    """Return all active page_subscribers for every active page linked to this gauge.
+
+    Deactivating a page must silence its alerts, so inactive pages are
+    excluded here the same way ``get_page_subscribers_for_site`` excludes them.
+    """
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         cur.execute(
             """SELECT ps.* FROM page_subscribers ps
                JOIN page_noaa_gauges png ON png.page_id = ps.page_id
-               WHERE png.noaa_gauge_id=%s AND ps.status='active'""",
+               JOIN user_pages up ON up.id = ps.page_id
+               WHERE png.noaa_gauge_id=%s AND ps.status='active' AND up.active=1""",
             (gauge_id,)
         )
         rows = cur.fetchall()

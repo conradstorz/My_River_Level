@@ -323,3 +323,24 @@ def test_init_db_is_idempotent_and_creates_new_tables(tmp_db):
     conn.close()
     assert {"page_sites", "noaa_observations", "gauge_forecasts"}.issubset(tables)
     assert {"last_success_at", "last_error", "last_error_at"}.issubset(site_cols)
+
+
+def test_get_page_subscribers_for_gauge_skips_inactive_pages(tmp_db):
+    """Disabling a page must stop its NOAA alerts, not just hide it from the portal."""
+    from db.models import (create_user_page, get_page_by_edit_token, get_or_create_noaa_gauge,
+                           link_page_gauge, add_page_subscriber, get_page_subscribers_for_gauge)
+    _, edit = create_user_page("Disabled page", tmp_db)
+    page = get_page_by_edit_token(edit, tmp_db)
+    gauge_id = get_or_create_noaa_gauge("abcd1", "Test", 10.0, 12.0, 14.0, 16.0, tmp_db)
+    link_page_gauge(page["id"], gauge_id, tmp_db)
+    add_page_subscriber(page["id"], "telegram", "999", "Ann", tmp_db)
+    assert [s["channel_id"] for s in get_page_subscribers_for_gauge(gauge_id, tmp_db)] == ["999"]
+
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute("UPDATE user_pages SET active=0 WHERE id=%s", (page["id"],))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    assert get_page_subscribers_for_gauge(gauge_id, tmp_db) == []
