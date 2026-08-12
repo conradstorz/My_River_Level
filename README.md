@@ -142,7 +142,8 @@ docker run --rm -v my_river_level_app_logs:/logs alpine chown -R 10001:10001 /lo
 ```
 
 You must also set `ADMIN_PASSWORD_HASH` in `.env` before `docker compose up`,
-or compose will refuse to start.
+or compose will refuse to start. Write it with `$$` in place of every `$` — see
+**Portal login** above.
 
 ### Outside Docker (development)
 
@@ -184,8 +185,15 @@ shows and accepts your Telegram, Twilio, and Facebook credentials. Set
 `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` in `.env`:
 
 ```bash
-docker compose run --rm --entrypoint python app -c "from werkzeug.security import generate_password_hash; print(generate_password_hash('your-password'))"
+docker compose run --rm --entrypoint python app -c "from werkzeug.security import generate_password_hash; print('ADMIN_PASSWORD_HASH=' + generate_password_hash(input('password: ')).replace('$', '$$'))"
 ```
+
+Paste that line into `.env` verbatim. The `.replace` is not cosmetic: a
+werkzeug hash contains `$` separators, docker compose interpolates `$name` in
+environment values, and an unescaped hash silently loses its salt — leaving a
+portal nobody can log into. Verify with
+`docker exec my_river_level-app-1 printenv ADMIN_PASSWORD_HASH`, which should
+show two `$` separators.
 
 If no password is configured the admin pages return **503** rather than falling
 open. The landing pages (`/view/<public_token>`, `/edit/<edit_token>`), the

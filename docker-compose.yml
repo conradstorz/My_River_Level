@@ -11,12 +11,17 @@ services:
       - "5743:5743"
     environment:
       # Secrets come from .env (gitignored); :? fails loudly if unset.
+      # Safe to interpolate: none of these values contain a `$`.
       - DATABASE_URL=${DATABASE_URL:?set DATABASE_URL in .env}
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:?set FLASK_SECRET_KEY in .env}
       # Portal login. Without a password hash the admin pages refuse every
-      # request (503) rather than falling open — they show and accept your
+      # request with 503 rather than falling open — they show and accept your
       # Telegram, Twilio, and Facebook credentials.
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      # NOTE: a werkzeug scrypt hash contains `$` separators, and compose
+      # interpolates `$name` here. The value in .env MUST have every `$`
+      # written as `$$` or the salt is silently eaten and no password can
+      # ever match. See .env.example for a generator that escapes for you.
       - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:?set ADMIN_PASSWORD_HASH in .env}
     volumes:
       # Named volume (not a host bind mount) so logs persist and the app runs
