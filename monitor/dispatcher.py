@@ -3,18 +3,38 @@ import threading
 import queue
 import logging
 
-from db.models import get_db, get_page_subscribers_for_gauge
+from db.models import (get_db, get_page_subscribers_for_gauge,
+                       get_page_subscribers_for_site)
 
 logger = logging.getLogger(__name__)
 
+DIRECTION_ARROWS = {"RISING": "📈", "FALLING": "📉", "STEADY": "➡️"}
+
 
 def format_transition_message(data):
-    """Build the alert text for a USGS site changing from one severity condition to another."""
+    """Build the alert text for a USGS site changing from one severity condition to another.
+
+    Leads with which way the river is moving: "HIGH" on its own does not tell
+    a reader whether to expect worse or better.
+    """
+    direction = data.get("direction", "STEADY")
+    arrow = DIRECTION_ARROWS.get(direction, DIRECTION_ARROWS["STEADY"])
     return (
-        f"⚠️ River Level Change: {data['station_name']} (#{data['site_number']})\n"
+        f"{arrow} {direction} — {data['station_name']} (#{data['site_number']})\n"
         f"Condition changed: {data['previous_severity']} → {data['new_severity']}\n"
         f"Current level: {data['current_value']:.2f} {data['unit']} "
         f"({data['percentile']:.1f}th percentile)"
+    )
+
+
+def format_trend_message(data):
+    """Build the alert text for a river rising or falling quickly."""
+    arrow = "📈" if data["direction"] == "RISING" else "📉"
+    verb = "risen" if data["direction"] == "RISING" else "fallen"
+    return (
+        f"{arrow} River {data['direction'].title()}: {data['station_name']} (#{data['site_number']})\n"
+        f"Has {verb} {abs(data['delta']):.2f} {data['unit']} in the last {data['hours']:.1f} hours\n"
+        f"Now {data['end_value']:.2f} {data['unit']} (was {data['start_value']:.2f})"
     )
 
 
@@ -84,11 +104,16 @@ class NotificationDispatcher(threading.Thread):
     def run(self):
         """Loop calling run_once to dequeue and dispatch notifications.
 
-        Continues until the stop event is set, then logs and exits.
+        Continues until the stop event is set, then logs and exits. A failure
+        inside run_once is logged and the loop continues, so one bad item or
+        one database blip cannot silently end all notification delivery.
         """
         logger.info("NotificationDispatcher started")
         while not self.stop_event.is_set():
-            self.run_once()
+            try:
+                self.run_once()
+            except Exception:
+                logger.exception("Dispatch cycle failed — continuing")
         logger.info("NotificationDispatcher stopped")
 
     def run_once(self):
@@ -128,6 +153,10 @@ class NotificationDispatcher(threading.Thread):
                 message = format_transition_message(item["data"])
                 trigger_type = "transition"
                 site_id = item["data"]["site_id"]
+            elif item["type"] == "trend":
+                message = format_trend_message(item["data"])
+                trigger_type = "trend"
+                site_id = item["data"]["site_id"]
             elif item["type"] == "reminder":
                 message = format_reminder_message(item["data"])
                 trigger_type = "reminder"
@@ -154,18 +183,21 @@ class NotificationDispatcher(threading.Thread):
                 logger.warning("Unknown notification type: %s", item.get("type"))
                 return
 
-            subscribers = get_active_subscribers(self.db_path)
+            # Site alerts go only to the subscribers of pages that reference
+            # this site — the `subscribers` table is for broadcasts alone, so
+            # nobody hears about a river they never asked about.
+            subscribers = get_page_subscribers_for_site(site_id, self.db_path)
             for sub in subscribers:
                 adapter = self.adapters.get(sub["channel"])
                 if adapter is None:
                     continue
                 try:
                     success = adapter.send(sub["channel_id"], message)
-                    log_notification(sub["id"], site_id, sub["channel"],
+                    log_notification(None, site_id, sub["channel"],
                                      message, trigger_type, success, db_path=self.db_path)
                 except Exception as e:
                     logger.exception("Failed to send to %s/%s", sub["channel"], sub["channel_id"])
-                    log_notification(sub["id"], site_id, sub["channel"],
+                    log_notification(None, site_id, sub["channel"],
                                      message, trigger_type, False, str(e), db_path=self.db_path)
         except Exception:
             logger.exception("Error processing notification item")

@@ -81,11 +81,16 @@ Never chain or pipe bash commands. Run one command at a time. Do not use `&&`, `
 
 The primary entry point is `main.py`, which starts several daemon threads sharing a single `notification_queue`:
 
-1. **USGS polling thread** (`monitor/polling.py`) — fetches USGS data on a configurable interval and enqueues notifications when percentile thresholds are crossed.
-2. **NOAA polling thread** (`monitor/noaa_polling.py`) — fetches NOAA NWPS gauge stages and enqueues notifications when the flood category (Action/Minor/Moderate/Major) changes.
-3. **Scheduler thread** (`monitor/scheduler.py`) — enforces reminder intervals so alerts aren't sent too frequently for persistent conditions.
-4. **Dispatcher thread** (`monitor/dispatcher.py`) — reads from the queue and routes messages to notification adapters.
-5. **Flask web server** (`web/app.py`, `web/routes.py`) — runs in its own thread; provides the management portal and handles webhooks.
+1. **USGS polling thread** (`monitor/polling.py`) — fetches USGS data on a configurable interval and enqueues notifications when percentile thresholds are crossed *or* when a site rises/falls faster than the configured rate.
+2. **NOAA polling thread** (`monitor/noaa_polling.py`) — fetches NOAA NWPS gauge stages, records each observation, and enqueues notifications when the flood category (Action/Minor/Moderate/Major) changes.
+3. **Forecast polling thread** (`monitor/forecast_polling.py`) — archives each gauge's published NOAA forecast and re-grades every gauge's flood-prediction accuracy.
+4. **Scheduler thread** (`monitor/scheduler.py`) — enforces reminder intervals so alerts aren't sent too frequently for persistent conditions.
+5. **Dispatcher thread** (`monitor/dispatcher.py`) — reads from the queue and routes messages to notification adapters.
+6. **Flask web server** (`web/app.py`, `web/routes.py`) — runs in its own thread under **waitress**; provides the management portal and handles webhooks.
+
+`main.py` supervises these threads every 60 seconds and exits non-zero if a
+critical one dies, so Docker's `restart: unless-stopped` brings the service
+back instead of leaving a container that is up but no longer monitoring.
 
 ### Module layout
 
@@ -97,6 +102,9 @@ monitor/
   polling.py            — USGS data fetch loop; uses dataretrieval nwis.get_iv / get_dv
   noaa_polling.py       — NOAA NWPS fetch loop; flood-category classification
   noaa_client.py        — NOAA NWPS API client and severity mapping
+  forecast_polling.py   — Archives NOAA forecasts; re-grades gauge accuracy
+  gauge_quality.py      — Scores archived forecasts against later observations
+  trend.py              — Rate-of-change detection for rise/fall alerts
   scheduler.py          — Throttles repeat alerts; tracks last-notified timestamps
   dispatcher.py         — Dequeues notifications and calls adapters
   site_search.py        — Ranked USGS gauge search by name (Monitoring Locations OGC API)
@@ -109,6 +117,8 @@ monitor/
     facebook.py         — Facebook Messenger webhook
 web/
   app.py                — Flask app factory
+  auth.py               — HTTP Basic guard; PUBLIC_ENDPOINTS allowlist
+  health.py             — GET /healthz worker-thread liveness
   routes.py             — Dashboard, Sites, Subscribers, Settings, Broadcast,
                           user landing pages (/pages, /view, /edit, /admin/pages), webhooks
 db/
@@ -132,7 +142,29 @@ tests/
 
 All runtime settings are stored in PostgreSQL (connection via `DATABASE_URL` env var). There are no config files at runtime.
 
-Key settings stored in the DB: `poll_interval_minutes`, `low_percentile`, `high_percentile`, `very_low_percentile`, `very_high_percentile`, `reminder_low_high_hours`, `reminder_severe_hours`, `historical_start_year`, `search_radius_miles`, and per-channel credentials (Telegram token, Twilio SID/token/numbers, Facebook tokens).
+Key settings stored in the DB: `poll_interval_minutes`, `low_percentile`, `high_percentile`, `very_low_percentile`, `very_high_percentile`, `reminder_low_high_hours`, `reminder_severe_hours`, `historical_start_year`, `search_radius_miles`, `rate_change_threshold_ft`, `rate_change_threshold_pct`, `rate_change_window_hours`, `rate_change_min_interval_hours`, `site_stale_hours`, `forecast_poll_hours`, and per-channel credentials (Telegram token, Twilio SID/token/numbers, Facebook page/verify tokens and app secret).
+
+Portal credentials are the exception: `ADMIN_USERNAME` and
+`ADMIN_PASSWORD_HASH` come from the environment, never the database — the
+database is what the portal protects. With no password set, admin routes
+return 503 rather than falling open.
+
+### Alert routing
+
+Alerts are routed per user, not broadcast. A landing page links to USGS sites
+(`page_sites`) and NOAA gauges (`page_noaa_gauges`); a transition, trend, or
+reminder for a site goes only to the active subscribers of the active pages
+that reference it. The global `subscribers` table is used solely for manual
+broadcasts.
+
+### Gauge quality grading
+
+`monitor/gauge_quality.py` grades how well each NOAA gauge predicts flooding:
+it pairs archived forecast points with the observations that later covered the
+same times, computes mean absolute error at 24/48/72 hours, and maps that to a
+letter plus plain-English wording. `noaa_gauges.has_forecast` is a deliberate
+tri-state — TRUE, FALSE, or NULL for "never successfully checked" — so a failed
+fetch never produces a confident "this gauge publishes no forecast" claim.
 
 ### USGS API
 

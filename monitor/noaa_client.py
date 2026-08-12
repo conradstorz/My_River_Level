@@ -2,11 +2,16 @@
 NOAA National Water Prediction Service (NWPS) API client.
 
 Fetches gauge metadata and flood-category thresholds, retrieves the current
-observed stage, and classifies flood severity (Normal / Action / Minor /
-Moderate / Major) from those thresholds.
+observed stage and the published forecast, and classifies flood severity
+(Normal / Action / Minor / Moderate / Major) from those thresholds.
+
+Every fetch degrades to None rather than raising: the polling threads treat a
+missing answer as "nothing to record this pass" and try again next time.
 """
 
 import logging
+from datetime import datetime, timezone
+
 import requests
 
 logger = logging.getLogger(__name__)
@@ -106,3 +111,173 @@ def fetch_current_stage(lid):
     except Exception:
         logger.exception("Error fetching NOAA stage for %s", lid)
         return None
+
+
+# ── Forecast ────────────────────────────────────────────────────────────────
+
+_ISSUED_KEYS = ("issuedTime", "issuanceTime", "issued_at", "issued", "issuedAt")
+_VALID_KEYS = ("validTime", "valid_at", "validtime", "time", "timestamp")
+_STAGE_KEYS = ("primary", "stage", "value")
+_SERIES_KEYS = ("data", "forecast", "points", "series")
+
+
+def parse_nwps_time(value):
+    """Parse an NWPS ISO 8601 timestamp into a timezone-aware datetime.
+
+    NWPS writes times as ``2026-08-12T12:00:00Z``; ``fromisoformat`` before
+    Python 3.11 chokes on the ``Z``, and a naive datetime would compare
+    wrongly against the TIMESTAMPTZ columns the forecast archive uses, so
+    anything without an offset is treated as UTC. Returns None if unparseable.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        text = value.strip().replace("Z", "+00:00").replace("z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _first_key(mapping, keys):
+    """Return the first present, non-None value among `keys`."""
+    for key in keys:
+        if isinstance(mapping, dict) and mapping.get(key) is not None:
+            return mapping[key]
+    return None
+
+
+def _extract_series(payload):
+    """Pull the list of forecast readings out of whichever shape NWPS sent.
+
+    Seen in the wild: a bare list, ``{"data": [...]}``, and a named section
+    such as ``{"forecast": {"data": [...]}}`` — the same dict-vs-list
+    variability `fetch_gauge_metadata` already copes with.
+    """
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return []
+    for key in _SERIES_KEYS:
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = _extract_series(value)
+            if nested:
+                return nested
+    return []
+
+
+def _extract_issued_at(payload):
+    """Find the forecast's issue time anywhere in the payload, or None."""
+    if isinstance(payload, dict):
+        issued = parse_nwps_time(_first_key(payload, _ISSUED_KEYS))
+        if issued is not None:
+            return issued
+        for key in _SERIES_KEYS:
+            value = payload.get(key)
+            if isinstance(value, dict):
+                issued = _extract_issued_at(value)
+                if issued is not None:
+                    return issued
+    return None
+
+
+def fetch_forecast_result(lid, timeout=TIMEOUT):
+    """
+    Fetch `lid`'s forecast and say *why* there isn't one when there isn't.
+
+    Returns ``{"status": ..., "forecast": dict | None}`` where status is:
+
+    ``"ok"``
+        A forecast was retrieved; ``forecast`` holds it.
+    ``"none"``
+        NOAA answered authoritatively that this gauge has no forecast — an
+        HTTP 404, or a 200 carrying an empty series.
+    ``"error"``
+        We could not find out: a network failure, a 5xx, or an unparseable
+        payload.
+
+    The distinction matters because the portal grades gauges. Treating an
+    outage as "publishes no forecast" would tell a user their gauge gives no
+    advance warning when in fact we simply failed to ask.
+    """
+    if not isinstance(lid, str) or not lid.strip():
+        return {"status": "error", "forecast": None}
+    try:
+        url = f"{NWPS_BASE}/gauges/{lid.lower()}/stageflow/forecast"
+        resp = requests.get(url, timeout=timeout)
+    except Exception:
+        logger.exception("Error fetching NOAA forecast for %s", lid)
+        return {"status": "error", "forecast": None}
+
+    if resp.status_code == 404:
+        logger.info("NOAA publishes no forecast for %s (HTTP 404)", lid)
+        return {"status": "none", "forecast": None}
+    if resp.status_code != 200:
+        logger.warning("NOAA forecast fetch failed for %s: HTTP %s",
+                       lid, resp.status_code)
+        return {"status": "error", "forecast": None}
+
+    forecast = _parse_forecast_payload(lid, resp)
+    if forecast is None:
+        return {"status": "error", "forecast": None}
+    if not forecast["points"]:
+        logger.info("NOAA returned an empty forecast series for %s", lid)
+        return {"status": "none", "forecast": None}
+    return {"status": "ok", "forecast": forecast}
+
+
+def _parse_forecast_payload(lid, resp):
+    """Turn a 200 forecast response into {"issued_at", "points"}, or None.
+
+    None means the payload could not be understood at all. An understood
+    payload that simply carries no readings returns an empty ``points`` list —
+    callers must treat those two cases differently.
+    """
+    try:
+        payload = resp.json()
+    except Exception:
+        logger.exception("Unparseable NOAA forecast payload for %s", lid)
+        return None
+
+    try:
+        points = []
+        for reading in _extract_series(payload):
+            if not isinstance(reading, dict):
+                continue
+            valid_at = parse_nwps_time(_first_key(reading, _VALID_KEYS))
+            stage = _first_key(reading, _STAGE_KEYS)
+            if valid_at is None or stage is None:
+                continue
+            try:
+                points.append({"valid_at": valid_at, "stage": float(stage)})
+            except (TypeError, ValueError):
+                continue
+    except Exception:
+        logger.exception("Error parsing NOAA forecast for %s", lid)
+        return None
+
+    issued_at = _extract_issued_at(payload) or datetime.now(timezone.utc)
+    return {"issued_at": issued_at, "points": points}
+
+
+def fetch_forecast(lid, timeout=TIMEOUT):
+    """
+    Fetch the published stage forecast for `lid` from NWPS.
+
+    Returns ``{"issued_at": datetime, "points": [{"valid_at": datetime,
+    "stage": float}, ...]}`` with timezone-aware datetimes, or None on any
+    error or when the gauge publishes no forecast. Readings missing a usable
+    time or stage are skipped rather than failing the whole fetch.
+
+    Use :func:`fetch_forecast_result` when you need to tell "NOAA has no
+    forecast" apart from "we could not reach NOAA".
+    """
+    return fetch_forecast_result(lid, timeout=timeout)["forecast"]

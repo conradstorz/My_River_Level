@@ -16,7 +16,15 @@ management portal, packaged as a Docker container backed by PostgreSQL.
 - Add gauges by USGS number **or** by searching gauge names — a ranked keyword
   search tolerant of word order and typos
 - Shareable per-user **landing pages** showing NOAA hydrographs and live
-  condition badges, each with its own subscriber list
+  condition badges, each with its own subscriber list — alerts are routed to a
+  page's subscribers only for the gauges that page watches
+- Alerts on **rate of change**, not just threshold crossings: a river that
+  rises or falls quickly triggers a 📈/📉 alert even while it stays inside the
+  normal percentile band
+- Grades each NOAA gauge's **flood-prediction quality** by archiving its
+  published forecasts and scoring them against what the river actually did
+- Password-protected portal, signature-verified webhooks, and a `/healthz`
+  liveness endpoint wired to a Docker healthcheck
 
 ## Architecture Overview
 
@@ -115,6 +123,28 @@ docker compose pull
 docker compose up -d
 ```
 
+Check it came up healthy — the healthcheck polls `/healthz`, which reports 503
+if any worker thread has died:
+
+```bash
+docker compose ps
+```
+
+#### Upgrading from a pre-hardening deployment
+
+The container now runs as the non-root user `river` (uid 10001). Docker does
+**not** re-chown a volume that already exists, so an existing `app_logs` volume
+is still root-owned and logging will fail with a permission error. Fix it once,
+before starting the new image:
+
+```bash
+docker run --rm -v my_river_level_app_logs:/logs alpine chown -R 10001:10001 /logs
+```
+
+You must also set `ADMIN_PASSWORD_HASH` in `.env` before `docker compose up`,
+or compose will refuse to start. Write it with `$$` in place of every `$` — see
+**Portal login** above.
+
 ### Outside Docker (development)
 
 ```bash
@@ -146,6 +176,30 @@ Open `http://localhost:5743` after starting the service.
 | Settings | `/settings` | Polling interval, percentile thresholds, and channel credentials |
 | Broadcast | `/broadcast` | Send a manual message to all (or selected) channels |
 | Landing pages | `/pages/new`, `/admin/pages` | Create and manage shareable NOAA gauge pages |
+| Health | `/healthz` | Unauthenticated JSON liveness for every worker thread |
+
+### Portal login
+
+Every admin page requires HTTP Basic authentication, because the Settings page
+shows and accepts your Telegram, Twilio, and Facebook credentials. Set
+`ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH` in `.env`:
+
+```bash
+docker compose run --rm --entrypoint python app -c "from werkzeug.security import generate_password_hash; print('ADMIN_PASSWORD_HASH=' + generate_password_hash(input('password: ')).replace('$', '$$'))"
+```
+
+Paste that line into `.env` verbatim. The `.replace` is not cosmetic: a
+werkzeug hash contains `$` separators, docker compose interpolates `$name` in
+environment values, and an unescaped hash silently loses its salt — leaving a
+portal nobody can log into. Verify with
+`docker exec my_river_level-app-1 printenv ADMIN_PASSWORD_HASH`, which should
+show two `$` separators.
+
+If no password is configured the admin pages return **503** rather than falling
+open. The landing pages (`/view/<public_token>`, `/edit/<edit_token>`), the
+provider webhooks, and `/healthz` stay public by design — the first two are
+authenticated by the unguessable token in the URL, the webhooks by request
+signature, and the healthcheck cannot supply credentials.
 
 ## Configuration
 
@@ -164,6 +218,13 @@ Settings page. Defaults:
 | `reminder_severe_hours` | 4 | Re-alert interval for SEVERE conditions |
 | `historical_start_year` | 1980 | Oldest year used for baseline statistics |
 | `search_radius_miles` | 25 | Radius for automatic gauge discovery |
+| `rate_change_threshold_ft` | 2.0 | Stage change (ft) that triggers a rise/fall alert on `00065` gauges |
+| `rate_change_threshold_pct` | 25 | Discharge change (%) that triggers one on `00060` gauges |
+| `rate_change_window_hours` | 6 | Window over which that change is measured |
+| `rate_change_min_interval_hours` | 6 | Minimum gap between rise/fall alerts for one site |
+| `site_stale_hours` | 6 | Age after which a site is flagged "Not reporting" |
+| `forecast_poll_hours` | 6 | How often NOAA forecasts are archived and gauges re-graded |
+| `facebook_app_secret` | (blank) | Required to accept Facebook webhooks — they are signature-verified |
 
 ## Notification Channels
 
@@ -173,7 +234,14 @@ Configure credentials on the Settings page or in `.env`.
 
 1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token.
 2. Set **Telegram Bot Token** (Settings page or `TELEGRAM_BOT_TOKEN` in `.env`).
-3. Users subscribe by sending `/start` to your bot (or add them manually via the Subscribers page).
+3. Users send `/subscribe <page code>` to the bot, where the page code is the
+   `public_token` from their landing page URL. That attaches them to that page
+   and they receive alerts only for the gauges it watches.
+   `/subscribe` with no code signs them up for manual broadcasts only.
+   Other commands: `/mypages`, `/unsubscribe [page code]`.
+
+The bot token is picked up without restarting the container — entering it on
+the Settings page starts the bot within about 30 seconds.
 
 ### SMS / WhatsApp (Twilio)
 
@@ -187,7 +255,10 @@ Configure credentials on the Settings page or in `.env`.
 1. Create a Facebook App with Messenger enabled and generate a Page Access Token.
 2. Enter **Page Token** and a **Verify Token** of your choice (Settings page or the `FACEBOOK_*` variables in `.env`).
 3. Set your webhook URL to `http://<your-host>:5743/webhook/facebook`.
-4. Users subscribe by messaging `JOIN` to your page.
+4. Enter your app's **App Secret** as the `facebook_app_secret` setting. Inbound
+   webhooks are verified against `X-Hub-Signature-256`; without the secret every
+   POST is rejected, so nobody can enroll subscribers by forging a payload.
+5. Users subscribe by messaging `JOIN` to your page.
 
 ## USGS Gauge Setup
 

@@ -1,15 +1,23 @@
+import base64
 import pytest
 import queue
 from db.models import init_db, get_db
 from web.app import create_app
 
+# The portal is behind HTTP Basic auth; these tests hit protected routes.
+ADMIN_AUTH = "Basic " + base64.b64encode(b"admin:testpass").decode()
+
 @pytest.fixture
-def client_with_queue(tmp_db):
+def client_with_queue(tmp_db, monkeypatch):
+    monkeypatch.setenv("ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "testpass")
+    monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     init_db(tmp_db)
     q = queue.Queue()
     app = create_app(db_path=tmp_db, notification_queue=q)
     app.config["TESTING"] = True
     with app.test_client() as c:
+        c.environ_base["HTTP_AUTHORIZATION"] = ADMIN_AUTH
         yield c, q
 
 def test_broadcast_get_returns_200(client_with_queue):

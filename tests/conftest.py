@@ -37,6 +37,9 @@ _DROP_ALL = """
 DROP TABLE IF EXISTS
     page_subscribers,
     page_noaa_gauges,
+    page_sites,
+    noaa_observations,
+    gauge_forecasts,
     noaa_gauges,
     user_pages,
     pending_registrations,

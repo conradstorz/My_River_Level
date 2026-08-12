@@ -4,12 +4,23 @@ Defines every HTTP route for the management portal (dashboard, sites,
 subscribers, settings, broadcast, admin), the public landing pages
 (create/view/edit/subscribe), and the inbound Twilio and Facebook
 webhooks. All routes are attached to the app by ``register_routes(app)``.
+
+The webhook routes are exempt from the portal's Basic auth (see
+``web/auth.py``) because the providers cannot supply credentials. They are
+authenticated instead by the provider's request signature, verified by
+:func:`verify_facebook_signature` and :func:`verify_twilio_signature`. Both
+fail closed: an unconfigured secret rejects every request rather than
+accepting them all.
 """
 
+import hashlib
+import hmac
+import json
 import logging
 
 from flask import render_template, current_app, request, redirect, url_for, flash
-from db.models import get_db, get_setting, set_setting
+from twilio.request_validator import RequestValidator
+from db.models import get_db, get_setting, set_setting, get_sites_with_health
 from version import VERSION, RELEASE_DATE
 from monitor.site_validation import validate_usgs_site
 from monitor.site_search import search_sites_by_name
@@ -19,8 +30,109 @@ from monitor.gauge_enrich import annotate_liveness, annotate_noaa
 from monitor.gauge_discovery import combined_site_matches
 from monitor.search_cache import get_or_compute
 from monitor.noaa_search import search_noaa_gauges_by_name
+from monitor.gauge_quality import split_quality_detail
 
 logger = logging.getLogger(__name__)
+
+# Bootstrap colour for each flood-prediction grade badge. "Unrated" is not a
+# failing grade -- it means we have not collected enough forecasts to judge the
+# gauge yet -- so it gets a calm grey, the same as anything unrecognised.
+GRADE_BADGE_CLASSES = {
+    "A": "bg-success",
+    "B": "bg-success",
+    "C": "bg-warning text-dark",
+    "D": "bg-danger",
+    "F": "bg-danger",
+}
+UNRATED_BADGE_CLASS = "bg-secondary"
+
+# Shown when a gauge has never been scored. The forecast archive starts empty
+# and fills over days, so this is the normal state for a newly added gauge and
+# has to read that way rather than as a fault.
+UNRATED_HEADLINE = "Not yet assessed"
+UNRATED_DETAIL = (
+    "We have not compared this gauge's forecasts against what the river "
+    "actually did yet. A grade appears once enough NOAA forecasts have been "
+    "collected — usually a few days after the gauge is added."
+)
+
+
+def gauge_quality_view(lid, db_path=None):
+    """Return the display fields for one gauge's flood-prediction grade.
+
+    Keys: ``grade`` (a letter or "Unrated"), ``badge_class``, ``headline``
+    (the plain-English verdict), ``detail`` (the sentence explaining it), and
+    ``checked_at``. A gauge that has never been scored comes back as
+    "Unrated / Not yet assessed" rather than as a missing value, so every
+    gauge on a page says something honest about itself.
+    """
+    from db.models import get_gauge_quality
+    record = get_gauge_quality(lid, db_path)
+    if record is None:
+        return {
+            "grade": "Unrated",
+            "badge_class": UNRATED_BADGE_CLASS,
+            "headline": UNRATED_HEADLINE,
+            "detail": UNRATED_DETAIL,
+            "checked_at": "",
+        }
+    headline, detail = split_quality_detail(record["detail"])
+    return {
+        "grade": record["grade"],
+        "badge_class": GRADE_BADGE_CLASSES.get(record["grade"], UNRATED_BADGE_CLASS),
+        "headline": headline or UNRATED_HEADLINE,
+        "detail": detail,
+        "checked_at": record["checked_at"],
+    }
+
+
+def annotate_gauge_quality(gauges, db_path=None):
+    """Attach a ``quality`` dict to every gauge row in place; returns the list."""
+    for gauge in gauges:
+        gauge["quality"] = gauge_quality_view(gauge["lid"], db_path)
+    return gauges
+
+
+
+def verify_facebook_signature(raw_body, db_path):
+    """Return True when `raw_body` carries a valid X-Hub-Signature-256 header.
+
+    Facebook signs the exact bytes it POSTed with the app secret. An empty
+    ``facebook_app_secret`` setting returns False — an unsigned webhook must
+    never be able to enroll subscribers.
+    """
+    app_secret = (get_setting("facebook_app_secret", db_path, default="") or "").strip()
+    if not app_secret:
+        logger.warning("Rejecting Facebook webhook: facebook_app_secret is not set")
+        return False
+    header = request.headers.get("X-Hub-Signature-256", "")
+    expected = "sha256=" + hmac.new(
+        app_secret.encode("utf-8"), raw_body, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(header, expected):
+        logger.warning("Rejecting Facebook webhook: signature mismatch")
+        return False
+    return True
+
+
+def verify_twilio_signature(db_path):
+    """Return True when the current request carries a valid X-Twilio-Signature.
+
+    Uses Twilio's own ``RequestValidator`` against the full request URL and
+    form parameters. An empty ``twilio_auth_token`` setting returns False.
+    """
+    auth_token = (get_setting("twilio_auth_token", db_path, default="") or "").strip()
+    if not auth_token:
+        logger.warning("Rejecting Twilio webhook: twilio_auth_token is not set")
+        return False
+    signature = request.headers.get("X-Twilio-Signature", "")
+    if not RequestValidator(auth_token).validate(
+        request.url, request.form.to_dict(), signature
+    ):
+        logger.warning("Rejecting Twilio webhook: signature mismatch for %s", request.path)
+        return False
+    return True
+
 
 SETTINGS_GROUPS = [
     {
@@ -178,11 +290,16 @@ def register_routes(app):
         out, and ``PAUSE``/``RESUME`` toggle page-subscriber status. Both the
         ``subscribers`` and ``page_subscribers`` tables are updated
         independently. Returns an empty TwiML response.
+
+        Rejects the request with 403 unless it carries a valid
+        ``X-Twilio-Signature``.
         """
+        db_path = current_app.config["DB_PATH"]
+        if not verify_twilio_signature(db_path):
+            return "Forbidden", 403
         from_number = request.form.get("From", "")
         body = request.form.get("Body", "").strip().upper()
         to_number = request.form.get("To", "")
-        db_path = current_app.config["DB_PATH"]
         wa_number = get_setting("twilio_whatsapp_number", db_path)
         channel = "whatsapp" if wa_number and wa_number in to_number else "sms"
         clean_from = from_number.replace("whatsapp:", "")
@@ -239,7 +356,12 @@ def register_routes(app):
 
         Error 30034 = US A2P 10DLC campaign not registered — requires
         registering the sending number with an A2P campaign in Twilio console.
+
+        Rejects the request with 403 unless it carries a valid
+        ``X-Twilio-Signature``.
         """
+        if not verify_twilio_signature(current_app.config["DB_PATH"]):
+            return "Forbidden", 403
         msg_sid = request.form.get("MessageSid", "")
         msg_status = request.form.get("MessageStatus", "")
         error_code = request.form.get("ErrorCode", "")
@@ -263,8 +385,9 @@ def register_routes(app):
         """GET|POST /webhook/facebook — verify the webhook and handle inbound messages.
 
         On GET, echoes ``hub.challenge`` when ``hub.mode`` is ``subscribe`` and
-        the verify token matches (else 403). On POST, opts in any sender whose
-        message is ``JOIN`` and returns ``OK``.
+        the verify token matches (else 403). On POST, verifies the
+        ``X-Hub-Signature-256`` header against the raw body (else 403), then
+        opts in any sender whose message is ``JOIN`` and returns ``OK``.
         """
         db_path = current_app.config["DB_PATH"]
         if request.method == "GET":
@@ -275,7 +398,18 @@ def register_routes(app):
             if mode == "subscribe" and token == verify_token:
                 return challenge, 200
             return "Forbidden", 403
-        data = request.get_json(force=True, silent=True) or {}
+        # Read the body once — the signature covers these exact bytes, so the
+        # payload must be parsed from the same buffer that was verified.
+        raw_body = request.get_data()
+        if not verify_facebook_signature(raw_body, db_path):
+            return "Forbidden", 403
+        try:
+            data = json.loads(raw_body or b"{}")
+        except (ValueError, TypeError):
+            logger.warning("Facebook webhook body was not valid JSON")
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
         for entry in data.get("entry", []):
             for event in entry.get("messaging", []):
                 psid = event.get("sender", {}).get("id")
@@ -297,15 +431,14 @@ def register_routes(app):
 
     @app.route("/sites")
     def sites():
-        """GET /sites — list all monitored sites with the add/search forms."""
+        """GET /sites — list every monitored site, with health, plus the add/search forms.
+
+        Sites come from ``get_sites_with_health`` so a gauge that has stopped
+        returning readings is flagged in the listing instead of sitting there
+        looking fine.
+        """
         db_path = current_app.config["DB_PATH"]
-        conn = get_db(db_path)
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM sites ORDER BY station_name")
-        all_sites = cur.fetchall()
-        cur.close()
-        conn.close()
-        return render_template("sites.html", sites=all_sites)
+        return render_template("sites.html", sites=get_sites_with_health(db_path))
 
     @app.route("/sites/add", methods=["POST"])
     def add_site():
@@ -379,14 +512,9 @@ def register_routes(app):
             logger.warning("NOAA enrichment failed", exc_info=True)
         page_rows.sort(key=lambda m: 0 if m.get("live") else 1)
 
-        conn = get_db(db_path)
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM sites ORDER BY station_name")
-        all_sites = cur.fetchall()
-        cur.close()
-        conn.close()
         return render_template(
-            "sites.html", sites=all_sites, matches=page_rows, query=query,
+            "sites.html", sites=get_sites_with_health(db_path),
+            matches=page_rows, query=query,
             page=page, pages=pages, total=total, capped=capped,
             noaa_only=noaa_only)
 
@@ -472,22 +600,25 @@ def register_routes(app):
         page = get_page_by_public_token(public_token, db_path)
         if not page or not page["active"]:
             abort(404)
-        gauges = get_page_gauges(page["id"], db_path)
+        gauges = annotate_gauge_quality(get_page_gauges(page["id"], db_path), db_path)
         return render_template("page_view.html", page=page, gauges=gauges)
 
     @app.route("/edit/<edit_token>")
     def page_edit(edit_token):
         """GET /edit/<edit_token> — render the page editor with its gauges and active subscribers, or 404."""
         from flask import abort
-        from db.models import get_page_by_edit_token, get_page_gauges, get_active_page_subscribers
+        from db.models import (get_page_by_edit_token, get_page_gauges,
+                               get_active_page_subscribers, get_page_sites)
         db_path = current_app.config["DB_PATH"]
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
-        gauges = get_page_gauges(page["id"], db_path)
+        gauges = annotate_gauge_quality(get_page_gauges(page["id"], db_path), db_path)
         subscribers = get_active_page_subscribers(page["id"], db_path)
+        sites = get_page_sites(page["id"], db_path)
         return render_template("page_edit.html", page=page, gauges=gauges,
-                               subscribers=subscribers, edit_token=edit_token)
+                               subscribers=subscribers, sites=sites,
+                               edit_token=edit_token)
 
     @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
     def page_add_gauge(edit_token):
@@ -532,7 +663,7 @@ def register_routes(app):
         from flask import abort
         db_path = current_app.config["DB_PATH"]
         from db.models import (get_page_by_edit_token, get_page_gauges,
-                               get_active_page_subscribers)
+                               get_active_page_subscribers, get_page_sites)
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -559,12 +690,14 @@ def register_routes(app):
                 start = (pageno - 1) * per_page
                 gauge_matches = cands[start:start + per_page]
 
-        gauges = get_page_gauges(page["id"], db_path)
+        gauges = annotate_gauge_quality(get_page_gauges(page["id"], db_path), db_path)
         subscribers = get_active_page_subscribers(page["id"], db_path)
+        sites = get_page_sites(page["id"], db_path)
         return render_template(
             "page_edit.html", page=page, gauges=gauges, subscribers=subscribers,
-            edit_token=edit_token, gauge_matches=gauge_matches, gauge_query=query,
-            gauge_page=pageno, gauge_pages=pages, gauge_total=total)
+            sites=sites, edit_token=edit_token, gauge_matches=gauge_matches,
+            gauge_query=query, gauge_page=pageno, gauge_pages=pages,
+            gauge_total=total)
 
     @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
     def page_remove_gauge(edit_token):
@@ -579,6 +712,76 @@ def register_routes(app):
         if gauge_id:
             unlink_page_gauge(page["id"], gauge_id, db_path)
             flash("Gauge removed.", "success")
+        return redirect(url_for("page_edit", edit_token=edit_token))
+
+    @app.route("/edit/<edit_token>/sites/add", methods=["POST"])
+    def page_add_site(edit_token):
+        """POST /edit/<edit_token>/sites/add — attach a USGS river gauge to the page.
+
+        USGS alerts are routed through ``page_sites``, so this link is what
+        decides who hears about a river changing. Takes ``site_number`` and an
+        optional ``parameter_code``, validates the number against the USGS API,
+        inserts the site if it is new, then links it to the page. 404s on an
+        unknown edit token.
+        """
+        from flask import abort
+        from db.models import get_page_by_edit_token, link_page_site
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+
+        site_number = request.form.get("site_number", "").strip()
+        param_code = request.form.get("parameter_code", "00065").strip() or "00065"
+        if not site_number:
+            flash("USGS site number is required.", "danger")
+            return redirect(url_for("page_edit", edit_token=edit_token))
+
+        is_valid, usgs_name, error = validate_usgs_site(site_number, param_code)
+        if not is_valid:
+            flash(f"Invalid site number: {error}", "danger")
+            return redirect(url_for("page_edit", edit_token=edit_token))
+
+        conn = get_db(db_path)
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                """INSERT INTO sites (site_number, station_name, parameter_code)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (site_number) DO NOTHING""",
+                (site_number, usgs_name, param_code)
+            )
+            conn.commit()
+            cur.execute("SELECT id FROM sites WHERE site_number=%s", (site_number,))
+            row = cur.fetchone()
+        finally:
+            cur.close()
+            conn.close()
+        if row is None:
+            flash(f"Could not add site {site_number}.", "danger")
+            return redirect(url_for("page_edit", edit_token=edit_token))
+
+        link_page_site(page["id"], row["id"], db_path)
+        flash(f"River gauge {usgs_name or site_number} added to this page.", "success")
+        return redirect(url_for("page_edit", edit_token=edit_token))
+
+    @app.route("/edit/<edit_token>/sites/remove", methods=["POST"])
+    def page_remove_site(edit_token):
+        """POST /edit/<edit_token>/sites/remove — detach a USGS gauge from the page.
+
+        Takes ``site_id`` and unlinks it. The site itself stays configured, so
+        any other page using it keeps its alerts. 404s on an unknown edit token.
+        """
+        from flask import abort
+        from db.models import get_page_by_edit_token, unlink_page_site
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+        site_id = request.form.get("site_id", type=int)
+        if site_id:
+            unlink_page_site(page["id"], site_id, db_path)
+            flash("River gauge removed from this page.", "success")
         return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/edit/<edit_token>/subscribe", methods=["POST"])
