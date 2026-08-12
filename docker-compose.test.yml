@@ -16,6 +16,6 @@ services:
       dockerfile: Dockerfile.test
     environment:
       # From .env (gitignored); :? fails loudly if unset.
-      - TEST_DATABASE_URL=${TEST_DATABASE_URL:?set TEST_DATABASE_URL in .env}
+      - TEST_DATABASE_URL=${TEST_DATABASE_URL:?set TEST_DATABASE_URL in .env}${TEST_DB_SUFFIX:-}
     networks:
       - shared-db
