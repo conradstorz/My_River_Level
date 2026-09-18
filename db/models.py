@@ -818,10 +818,13 @@ def get_sites_with_health(db_path=None):
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT *,
-                      (last_success_at IS NULL
-                       OR last_success_at < NOW() - (%s * INTERVAL '1 hour')) AS stale
-               FROM sites ORDER BY id""",
+            """SELECT s.*,
+                      (s.last_success_at IS NULL
+                       OR s.last_success_at < NOW() - (%s * INTERVAL '1 hour')) AS stale,
+                      (SELECT COUNT(*) FROM page_sites ps
+                         JOIN user_pages up ON up.id = ps.page_id
+                        WHERE ps.site_id = s.id AND up.status IN ('active', 'paused')) AS page_count
+               FROM sites s ORDER BY s.id""",
             (stale_hours,)
         )
         rows = cur.fetchall()

@@ -497,3 +497,15 @@ def test_edit_page_shows_gauge_grade(client):
     body = _anon(client).get(f"/edit/{edit}").data.decode()
     assert ">F<" in body
     assert "No readings in the last 24 hours." in body
+
+
+def test_admin_pages_shows_pin_owner_and_status(client, tmp_db):
+    from db.models import create_pin_page, save_pin
+    page = create_pin_page(4242, tmp_db)
+    save_pin(page["id"], 38.28, -85.76, "Ohio River", "floods",
+             [{"site_number": "03294500", "station_name": "Ohio", "parameter_code": "00065"}],
+             [], tmp_db)
+    body = client.get("/admin/pages").data.decode()
+    assert "Ohio River" in body and "4242" in body
+    assert "38.28" in body and "-85.76" in body
+    assert "active" in body.lower()

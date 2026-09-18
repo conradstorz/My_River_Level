@@ -5,25 +5,28 @@
 {% if pages %}
 <table class="table table-striped">
   <thead><tr>
-    <th>Name</th><th>Gauges</th><th>Subscribers</th>
+    <th>Name</th><th>Pin</th><th>Owner</th><th>Sources</th><th>Subscribers</th>
     <th>Created</th><th>Status</th><th></th>
   </tr></thead>
   <tbody>
   {% for p in pages %}
   <tr class="{{ '' if p.active else 'table-secondary text-muted' }}">
     <td>
-      {{ p.page_name }}<br>
+      {{ p.page_name }}{% if p.river_name %} <span class="text-muted">— {{ p.river_name }}</span>{% endif %}<br>
       <small class="text-muted">
         <a href="{{ url_for('page_view', public_token=p.public_token) }}" target="_blank">View ↗</a>
       </small>
     </td>
-    <td>{{ p.gauge_count }}</td>
+    <td><small>{% if p.pin_lat is not none %}{{ "%.2f"|format(p.pin_lat) }}, {{ "%.2f"|format(p.pin_lon) }}{% else %}—{% endif %}</small></td>
+    <td><small>{{ p.owner_chat_id if p.owner_chat_id is not none else "admin" }}</small></td>
+    <td>{{ p.site_count }} USGS · {{ p.gauge_count }} NOAA</td>
     <td>{{ p.subscriber_count }}</td>
     <td><small>{{ p.created_at }}</small></td>
     <td>
       <span class="badge bg-{{ 'success' if p.active else 'secondary' }}">
         {{ 'Active' if p.active else 'Disabled' }}
       </span>
+      <span class="badge bg-light text-dark">{{ p.status }}</span>
     </td>
     <td>
       <form method="post" action="{{ url_for('admin_toggle_page', page_id=p.id) }}">

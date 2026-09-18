@@ -1020,9 +1020,11 @@ def register_routes(app):
         cur.execute("""
             SELECT up.*,
                    COUNT(DISTINCT png.noaa_gauge_id) AS gauge_count,
+                   COUNT(DISTINCT pst.site_id) AS site_count,
                    COUNT(DISTINCT ps.id) AS subscriber_count
             FROM user_pages up
             LEFT JOIN page_noaa_gauges png ON png.page_id = up.id
+            LEFT JOIN page_sites pst ON pst.page_id = up.id
             LEFT JOIN page_subscribers ps ON ps.page_id = up.id AND ps.status='active'
             GROUP BY up.id
             ORDER BY up.created_at DESC

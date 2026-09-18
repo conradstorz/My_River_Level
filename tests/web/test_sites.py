@@ -240,3 +240,14 @@ def test_sites_page_does_not_flag_a_healthy_site(client, tmp_db):
     body = client.get("/sites").data.decode()
     assert "Live Gauge" in body
     assert "Not reporting" not in body
+
+
+def test_sites_list_shows_origin_and_page_count(client, tmp_db):
+    from db.models import create_pin_page, save_pin
+    page = create_pin_page(1, tmp_db)
+    save_pin(page["id"], 38.0, -85.0, "Ohio", "unusual",
+             [{"site_number": "03294500", "station_name": "Ohio at Louisville",
+               "parameter_code": "00065"}], [], tmp_db)
+    body = client.get("/sites").data.decode()
+    assert "User-added" in body
+    assert "1 page" in body
