@@ -125,6 +125,17 @@ def test_sites_without_stage_or_discharge_are_dropped(nwps):
     assert [c.id for c in result.candidates if c.kind == "usgs"] == ["03294500"]
 
 
+def test_parameter_check_failure_drops_usgs_candidates(nwps):
+    with patch("monitor.pin_discovery.requests.get", side_effect=_nldi()), \
+         patch("monitor.pin_discovery.nwis.get_info", side_effect=Exception("down")):
+        result = discover(*PIN, reach_km=50, fallback_radius_miles=25)
+    assert result.snap == "on_network"
+    assert [c for c in result.candidates if c.kind == "usgs"] == []
+    # No USGS candidates means no matched-tag NOAA gauges either; both come
+    # from gauges_near, tagged "nearby", sorted by distance from the pin.
+    assert [c.id for c in result.candidates if c.kind == "noaa"] == ["MLUK2", "XXXX1"]
+
+
 def test_off_network_pin_falls_back_to_bbox(nwps):
     what_sites = pd.DataFrame([
         {"site_no": "03294500", "station_nm": "OHIO RIVER AT LOUISVILLE",
@@ -213,3 +224,24 @@ def test_river_name_derived_from_gauges_when_nldi_has_none(nwps):
         result = discover(*PIN, reach_km=50, fallback_radius_miles=25)
     assert result.snap == "on_network"
     assert result.river_name == "Ohio River"
+
+
+def test_river_name_prefers_noaa_stem_names_over_usgs(nwps):
+    nameless = {"type": "FeatureCollection", "features": [{
+        "type": "Feature",
+        "geometry": POSITION["features"][0]["geometry"],
+        "properties": {"comid": "1234567"},
+    }]}
+
+    def meta(identifier, timeout=10):
+        if identifier == "03293551":
+            return {"lid": "MLUK2", "station_name": "Falls of the Ohio at McAlpine Upper",
+                    "usgs_id": "03293551", "action_stage": 21.0, "minor_flood_stage": None,
+                    "moderate_flood_stage": None, "major_flood_stage": None}
+        return None
+
+    with patch("monitor.pin_discovery.requests.get", side_effect=_nldi(position=nameless)), \
+         patch("monitor.pin_discovery.nwis.get_info", return_value=ALL_HAVE_STAGE), \
+         patch("monitor.pin_discovery.fetch_gauge_metadata", side_effect=meta):
+        result = discover(*PIN, reach_km=50, fallback_radius_miles=25)
+    assert result.river_name == "Falls Of The Ohio"

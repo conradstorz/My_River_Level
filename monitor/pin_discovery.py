@@ -251,8 +251,13 @@ def discover(lat, lon, *, reach_km, fallback_radius_miles):
     try:
         parameters = _parameters_by_site(list(seen))
     except Exception as exc:
+        # The parameter check is a hard requirement: guessing a code (e.g.
+        # always WANTED_PARAMETERS[0]) would provision a site that polls
+        # with a parameter it may not report, forever. Drop every USGS
+        # candidate for this discovery instead; NOAA gauges from the
+        # bounding-box listing are unaffected and still proposed below.
         logger.warning("USGS parameter check failed: %s", exc)
-        parameters = {number: WANTED_PARAMETERS[0] for number in seen}
+        parameters = {}
 
     candidates = []
     for number, (name, slat, slon, tag) in seen.items():
@@ -292,13 +297,17 @@ def discover(lat, lon, *, reach_km, fallback_radius_miles):
         logger.warning("NWPS gauge listing failed: %s", exc)
 
     if river_name is None and snap == "on_network":
-        # NWPS names are cleaner than USGS station names, so prefer them;
-        # "nearby"/"nearest" candidates are excluded since they are not
-        # necessarily on the same river as the pin.
+        # NWPS names are cleaner than USGS station names, so prefer them:
+        # try to derive a name from NOAA stem gauges first, and fall back
+        # to USGS stem gauges only if that yields nothing. "nearby"/
+        # "nearest" candidates are excluded since they are not necessarily
+        # on the same river as the pin.
         stem_tags = ("upstream", "downstream")
         noaa_names = [c.name for c in candidates if c.kind == "noaa" and c.tag in stem_tags]
         usgs_names = [c.name for c in candidates if c.kind == "usgs" and c.tag in stem_tags]
-        river_name = river_name_from_gauges(noaa_names + usgs_names)
+        river_name = river_name_from_gauges(noaa_names)
+        if river_name is None:
+            river_name = river_name_from_gauges(usgs_names)
 
     order = {"upstream": 0, "downstream": 1, "nearby": 2, "nearest": 2}
     candidates.sort(key=lambda c: (order.get(c.tag, 3), c.distance_km, c.kind))
