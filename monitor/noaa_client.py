@@ -125,13 +125,17 @@ def _gauge_from_payload(item):
     lon = item.get("longitude", item.get("lon"))
     if lat is None or lon is None:
         return None
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
     usgs_id = item.get("usgsId") or None
     return {
         "lid": str(item["lid"]).upper(),
         "name": item.get("name") or item["lid"],
         "usgs_id": str(usgs_id) if usgs_id else None,
-        "lat": float(lat),
-        "lon": float(lon),
+        "lat": lat,
+        "lon": lon,
     }
 
 
@@ -158,7 +162,9 @@ def gauges_near(lat, lon, radius_miles, timeout=TIMEOUT):
     except Exception:
         logger.exception("Error listing NWPS gauges near %s,%s", lat, lon)
         return []
-    items = data.get("gauges", []) if isinstance(data, dict) else []
+    items = data.get("gauges") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return []
     rows = [_gauge_from_payload(item) for item in items]
     return [r for r in rows if r]
 

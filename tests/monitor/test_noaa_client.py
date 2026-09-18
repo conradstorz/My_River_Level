@@ -344,3 +344,18 @@ def test_gauges_near_skips_entries_without_lid_or_coordinates():
     with patch("monitor.noaa_client.requests.get",
                return_value=_mock_gauges_response(payload)):
         assert gauges_near(38.25, -85.75, 10) == []
+
+
+def test_gauges_near_tolerates_null_listing_and_bad_coordinates():
+    with patch("monitor.noaa_client.requests.get",
+               return_value=_mock_gauges_response({"gauges": None})):
+        assert gauges_near(38.25, -85.75, 10) == []
+    payload = {"gauges": [{"lid": "BADC1", "name": "bad", "latitude": "N/A",
+                           "longitude": {"x": 1}},
+                          {"lid": "GOOD1", "name": "good", "latitude": "38.3",
+                           "longitude": "-85.7"}]}
+    with patch("monitor.noaa_client.requests.get",
+               return_value=_mock_gauges_response(payload)):
+        rows = gauges_near(38.25, -85.75, 10)
+    assert [r["lid"] for r in rows] == ["GOOD1"]
+    assert rows[0]["lat"] == 38.3
