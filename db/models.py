@@ -357,7 +357,12 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
             return None
         if page["owner_chat_id"] is not None and page["owner_chat_id"] != chat_id:
             return None
-        new_status = "active" if page["pin_lat"] is not None else page["status"]
+        # Only a pending page is promoted: re-binding a paused page (the
+        # owner tapping the deep link again) must not silently undo the pause.
+        if page["status"] == "pending" and page["pin_lat"] is not None:
+            new_status = "active"
+        else:
+            new_status = page["status"]
         cur.execute(
             "UPDATE user_pages SET owner_chat_id=%s, status=%s WHERE id=%s RETURNING *",
             (chat_id, new_status, page["id"])

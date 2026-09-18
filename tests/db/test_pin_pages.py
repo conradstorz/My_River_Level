@@ -62,6 +62,14 @@ def test_bind_activates_a_page_that_already_has_a_pin(tmp_db):
     assert bound["status"] == "active"
 
 
+def test_rebind_does_not_unpause_a_paused_page(tmp_db):
+    page = create_pin_page(42, tmp_db)
+    save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
+    set_page_status(page["id"], "paused", tmp_db)
+    bound = bind_page_to_chat(page["edit_token"], 42, "Ann", tmp_db)
+    assert bound["status"] == "paused"
+
+
 def test_bind_refuses_unknown_token_and_foreign_page(tmp_db):
     assert bind_page_to_chat("nope", 42, "Ann", tmp_db) is None
     page = create_pin_page(1, tmp_db)
