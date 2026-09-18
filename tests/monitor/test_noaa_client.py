@@ -295,3 +295,67 @@ def test_fetch_forecast_result_returns_ok_with_points(mocker):
     result = fetch_forecast_result("abcd1")
     assert result["status"] == "ok"
     assert len(result["forecast"]["points"]) == 1
+
+
+# ── Gauges near a point ──────────────────────────────────────────────────────
+
+from monitor.noaa_client import gauges_near
+
+
+def _mock_gauges_response(payload, status=200):
+    mock = MagicMock()
+    mock.status_code = status
+    mock.json.return_value = payload
+    return mock
+
+
+def test_gauges_near_parses_listing_and_bbox():
+    payload = {"gauges": [
+        {"lid": "MLUK2", "usgsId": "03293551", "name": "McAlpine Upper",
+         "latitude": 38.28, "longitude": -85.76},
+        {"lid": "NOUS1", "usgsId": None, "name": "No USGS",
+         "latitude": 38.30, "longitude": -85.70},
+    ]}
+    with patch("monitor.noaa_client.requests.get",
+               return_value=_mock_gauges_response(payload)) as get:
+        rows = gauges_near(38.25, -85.75, 10)
+    assert [r["lid"] for r in rows] == ["MLUK2", "NOUS1"]
+    assert rows[0]["usgs_id"] == "03293551" and rows[1]["usgs_id"] is None
+    assert rows[0]["lat"] == 38.28 and rows[0]["lon"] == -85.76
+    params = get.call_args.kwargs["params"]
+    assert params["bbox.ymin"] < 38.25 < params["bbox.ymax"]
+    assert params["bbox.xmin"] < -85.75 < params["bbox.xmax"]
+
+
+def test_gauges_near_returns_empty_on_http_error():
+    with patch("monitor.noaa_client.requests.get",
+               return_value=_mock_gauges_response({}, status=500)):
+        assert gauges_near(38.25, -85.75, 10) == []
+
+
+def test_gauges_near_returns_empty_on_exception():
+    with patch("monitor.noaa_client.requests.get", side_effect=Exception("boom")):
+        assert gauges_near(38.25, -85.75, 10) == []
+
+
+def test_gauges_near_skips_entries_without_lid_or_coordinates():
+    payload = {"gauges": [{"name": "nameless"},
+                          {"lid": "NOLL1", "name": "no coords"}]}
+    with patch("monitor.noaa_client.requests.get",
+               return_value=_mock_gauges_response(payload)):
+        assert gauges_near(38.25, -85.75, 10) == []
+
+
+def test_gauges_near_tolerates_null_listing_and_bad_coordinates():
+    with patch("monitor.noaa_client.requests.get",
+               return_value=_mock_gauges_response({"gauges": None})):
+        assert gauges_near(38.25, -85.75, 10) == []
+    payload = {"gauges": [{"lid": "BADC1", "name": "bad", "latitude": "N/A",
+                           "longitude": {"x": 1}},
+                          {"lid": "GOOD1", "name": "good", "latitude": "38.3",
+                           "longitude": "-85.7"}]}
+    with patch("monitor.noaa_client.requests.get",
+               return_value=_mock_gauges_response(payload)):
+        rows = gauges_near(38.25, -85.75, 10)
+    assert [r["lid"] for r in rows] == ["GOOD1"]
+    assert rows[0]["lat"] == 38.3

@@ -2,9 +2,11 @@
 
 import threading
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from db.models import get_db, get_setting
+from monitor.retirement import sweep
 
 logger = logging.getLogger(__name__)
 
@@ -71,10 +73,43 @@ def get_current_site_severities(db_path=None):
     return [dict(r) for r in rows]
 
 
+#: Which USGS severities each sensitivity level wants to hear about. Trend
+#: (rise/fall rate) alerts are gated separately because they carry no
+#: severity. NOAA flood-category changes reach every level.
+_SEVERITIES_FOR = {
+    "floods": {"SEVERE HIGH"},
+    "unusual": {"SEVERE HIGH", "HIGH", "LOW", "SEVERE LOW", "NORMAL"},
+    "all": {"SEVERE HIGH", "HIGH", "LOW", "SEVERE LOW", "NORMAL"},
+}
+
+
+def alert_allowed(sensitivity, alert_type, severity, previous_severity=None):
+    """Return True if a page at `sensitivity` should receive this alert.
+
+    Applied at dispatch time, so two pages watching the same gauge with
+    different dials still cost one poll. An unrecognised dial is treated as
+    the default 'unusual' rather than silencing the page. For a `transition`,
+    `previous_severity` is also checked so a 'floods' page gets the all-clear
+    when a SEVERE HIGH condition drops back to NORMAL -- the new severity
+    alone would otherwise not qualify.
+    """
+    level = sensitivity if sensitivity in _SEVERITIES_FOR else "unusual"
+    if alert_type == "noaa_transition":
+        return True
+    if alert_type == "trend":
+        return level == "all"
+    if alert_type == "transition":
+        return severity in _SEVERITIES_FOR[level] or previous_severity in _SEVERITIES_FOR[level]
+    if alert_type == "reminder":
+        return severity in _SEVERITIES_FOR[level]
+    return True
+
+
 class SchedulerThread(threading.Thread):
     """Daemon thread that re-enqueues reminder alerts for sites still in an alert state."""
 
     CHECK_INTERVAL_SECONDS = 300  # check every 5 minutes
+    SWEEP_INTERVAL_SECONDS = 3600  # retire unreferenced user sources hourly
 
     def __init__(self, notification_queue, db_path=None, stop_event=None):
         """Store the notification queue, optional db_path, and stop event."""
@@ -82,12 +117,14 @@ class SchedulerThread(threading.Thread):
         self.notification_queue = notification_queue
         self.db_path = db_path
         self.stop_event = stop_event or threading.Event()
+        self._last_sweep = 0.0
 
     def run(self):
-        """Check reminders each iteration then wait CHECK_INTERVAL_SECONDS, looping until stop_event is set."""
+        """Check reminders each iteration, sweep hourly, until stop_event is set."""
         logger.info("SchedulerThread started")
         while not self.stop_event.is_set():
             self._check_reminders()
+            self._maybe_sweep()
             self.stop_event.wait(timeout=self.CHECK_INTERVAL_SECONDS)
         logger.info("SchedulerThread stopped")
 
@@ -102,3 +139,17 @@ class SchedulerThread(threading.Thread):
                     })
         except Exception:
             logger.exception("Error checking reminders")
+
+    def _maybe_sweep(self):
+        """Run the retirement sweep if SWEEP_INTERVAL_SECONDS have passed."""
+        now = time.monotonic()
+        if now - self._last_sweep < self.SWEEP_INTERVAL_SECONDS:
+            return
+        try:
+            sweep(self.db_path)
+        except Exception:
+            # Leave _last_sweep alone so the next reminder pass (5 min) retries,
+            # instead of leaving stale rows for another hour.
+            logger.exception("Retirement sweep failed — will retry next pass")
+            return
+        self._last_sweep = now

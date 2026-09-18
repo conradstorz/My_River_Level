@@ -245,7 +245,7 @@ def score_gauge(gauge, db_path=None):
 def score_all_gauges(db_path=None):
     """Grade every NOAA gauge, persist the verdicts, and return how many."""
     scored = 0
-    for gauge in get_all_noaa_gauges(db_path):
+    for gauge in get_all_noaa_gauges(db_path, active_only=True):
         try:
             result = score_gauge(gauge, db_path)
         except Exception:

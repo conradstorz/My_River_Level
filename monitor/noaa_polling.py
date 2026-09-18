@@ -91,7 +91,7 @@ class NoaaPollingThread(threading.Thread):
 
     def _poll(self):
         """Evaluate every gauge once, enqueuing a transition on category change."""
-        gauges = get_all_noaa_gauges(self.db_path)
+        gauges = get_all_noaa_gauges(self.db_path, active_only=True)
         for gauge in gauges:
             try:
                 transition = fetch_and_evaluate_noaa_gauge(gauge, self.db_path)

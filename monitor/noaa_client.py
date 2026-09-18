@@ -10,6 +10,7 @@ missing answer as "nothing to record this pass" and try again next time.
 """
 
 import logging
+import math
 from datetime import datetime, timezone
 
 import requests
@@ -111,6 +112,61 @@ def fetch_current_stage(lid):
     except Exception:
         logger.exception("Error fetching NOAA stage for %s", lid)
         return None
+
+
+_MILES_PER_DEGREE_LAT = 69.0
+
+
+def _gauge_from_payload(item):
+    """Normalise one NWPS gauge listing entry, or None if unusable."""
+    if not isinstance(item, dict) or not item.get("lid"):
+        return None
+    lat = item.get("latitude", item.get("lat"))
+    lon = item.get("longitude", item.get("lon"))
+    if lat is None or lon is None:
+        return None
+    try:
+        lat, lon = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return None
+    usgs_id = item.get("usgsId") or None
+    return {
+        "lid": str(item["lid"]).upper(),
+        "name": item.get("name") or item["lid"],
+        "usgs_id": str(usgs_id) if usgs_id else None,
+        "lat": lat,
+        "lon": lon,
+    }
+
+
+def gauges_near(lat, lon, radius_miles, timeout=TIMEOUT):
+    """List NWPS gauges inside a bounding box of `radius_miles` around a point.
+
+    Returns [{lid, name, usgs_id, lat, lon}] — an empty list on any failure,
+    because a discovery step that cannot list NOAA gauges should degrade to
+    "no NOAA gauges proposed", not abort the whole pin flow.
+    """
+    dlat = radius_miles / _MILES_PER_DEGREE_LAT
+    dlon = radius_miles / (_MILES_PER_DEGREE_LAT * max(math.cos(math.radians(lat)), 0.01))
+    params = {
+        "bbox.xmin": lon - dlon, "bbox.ymin": lat - dlat,
+        "bbox.xmax": lon + dlon, "bbox.ymax": lat + dlat,
+        "srid": "EPSG_4326",
+    }
+    try:
+        resp = requests.get(f"{NWPS_BASE}/gauges", params=params, timeout=timeout)
+        if resp.status_code != 200:
+            logger.warning("NWPS gauge listing failed: HTTP %s", resp.status_code)
+            return []
+        data = resp.json()
+    except Exception:
+        logger.exception("Error listing NWPS gauges near %s,%s", lat, lon)
+        return []
+    items = data.get("gauges") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        return []
+    rows = [_gauge_from_payload(item) for item in items]
+    return [r for r in rows if r]
 
 
 # ── Forecast ────────────────────────────────────────────────────────────────

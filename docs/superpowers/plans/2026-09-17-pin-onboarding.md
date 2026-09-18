@@ -1307,7 +1307,7 @@ git commit -m "feat(noaa): list NWPS gauges inside a bounding box"
 - Create: `tests/monitor/test_pin_discovery.py`
 
 **Interfaces:**
-- Consumes: `gauges_near` from Task 5.
+- Consumes: `gauges_near` from Task 5 and the existing `fetch_gauge_metadata(identifier)` from `monitor/noaa_client.py` (accepts a USGS number, returns `{lid, station_name, usgs_id, ...}` or None). The live NWPS listing has no `usgsId`, so NOAA-to-USGS matching goes through `fetch_gauge_metadata` per proposed USGS site.
 - Produces:
   ```python
   @dataclass
@@ -1411,11 +1411,22 @@ ALL_HAVE_STAGE = _catalog(("03293551", "00065"), ("03294500", "00065"),
                           ("03294500", "00060"), ("03294600", "00060"))
 
 
+def _meta(identifier, timeout=10):
+    """NWPS per-gauge metadata keyed by USGS number (the listing has no usgsId)."""
+    if identifier == "03293551":
+        return {"lid": "MLUK2", "station_name": "McAlpine Upper", "usgs_id": "03293551",
+                "action_stage": 21.0, "minor_flood_stage": 23.0,
+                "moderate_flood_stage": 30.0, "major_flood_stage": 38.0}
+    return None
+
+
 @pytest.fixture
 def nwps():
-    with patch("monitor.pin_discovery.gauges_near") as g:
+    """The live NWPS listing carries no usgsId, so usgs_id is always None here."""
+    with patch("monitor.pin_discovery.gauges_near") as g, \
+         patch("monitor.pin_discovery.fetch_gauge_metadata", side_effect=_meta):
         g.return_value = [
-            {"lid": "MLUK2", "name": "McAlpine Upper", "usgs_id": "03293551",
+            {"lid": "MLUK2", "name": "McAlpine Upper", "usgs_id": None,
              "lat": 38.29, "lon": -85.74},
             {"lid": "XXXX1", "name": "Some Other Creek", "usgs_id": None,
              "lat": 38.30, "lon": -85.60},
@@ -1505,6 +1516,7 @@ def test_everything_failing_yields_empty_but_valid_result():
     with patch("monitor.pin_discovery.requests.get", side_effect=Exception("down")), \
          patch("monitor.pin_discovery.nwis.what_sites", side_effect=Exception("down")), \
          patch("monitor.pin_discovery.nwis.get_info", side_effect=Exception("down")), \
+         patch("monitor.pin_discovery.fetch_gauge_metadata", return_value=None), \
          patch("monitor.pin_discovery.gauges_near", return_value=[]):
         result = discover(*PIN, reach_km=50, fallback_radius_miles=25)
     assert result.snap == "failed"
@@ -1540,8 +1552,11 @@ the pin is off the network, navigation finds nothing, or NLDI is down, the
 existing bounding-box site search fills the list instead, tagged "nearest",
 so the confirm screen is never empty for a bad reason.
 
-NOAA gauges have no NLDI layer; they come from the NWPS bounding-box listing
-and are matched to proposed USGS sites by the USGS id NWPS publishes.
+NOAA gauges have no NLDI layer. Each proposed USGS site is looked up on the
+NWPS per-gauge endpoint (it resolves a USGS number to its LID), so a matched
+NOAA gauge inherits the site's upstream/downstream tag; the NWPS bounding-box
+listing then adds any other gauges in range as "nearby". The listing itself
+publishes no usgsId, which is why the match goes through the per-gauge call.
 
 This module touches no database. Every network step degrades to "nothing
 from that step" and logs why, never raising to the caller.
@@ -1554,7 +1569,7 @@ from dataclasses import asdict, dataclass, field
 import dataretrieval.nwis as nwis
 import requests
 
-from monitor.noaa_client import gauges_near
+from monitor.noaa_client import fetch_gauge_metadata, gauges_near
 
 logger = logging.getLogger(__name__)
 
@@ -1736,14 +1751,31 @@ def discover(lat, lon, *, reach_km, fallback_radius_miles):
             distance_km=round(haversine_km(lat, lon, slat, slon), 1),
             tag=tag, parameter_code=parameters[number]))
 
-    tag_by_usgs = {c.id: c.tag for c in candidates}
+    # NOAA gauges that share a proposed USGS site inherit its tag. NWPS
+    # resolves a USGS number on its per-gauge endpoint; the listing does not
+    # publish usgsId, so this is the only reliable way to pair them.
+    matched = {}
+    for c in list(candidates):
+        try:
+            meta = fetch_gauge_metadata(c.id)
+        except Exception as exc:
+            logger.warning("NWPS lookup failed for USGS %s: %s", c.id, exc)
+            continue
+        if not meta or not meta.get("lid") or meta["lid"] in matched:
+            continue
+        matched[meta["lid"]] = Candidate(
+            kind="noaa", id=meta["lid"], name=meta.get("station_name") or meta["lid"],
+            distance_km=c.distance_km, tag=c.tag, usgs_id=c.id)
+    candidates.extend(matched.values())
+
     try:
         for g in gauges_near(lat, lon, fallback_radius_miles):
-            tag = tag_by_usgs.get(g["usgs_id"], "nearby") if g["usgs_id"] else "nearby"
+            if g["lid"] in matched:
+                continue
             candidates.append(Candidate(
                 kind="noaa", id=g["lid"], name=g["name"],
                 distance_km=round(haversine_km(lat, lon, g["lat"], g["lon"]), 1),
-                tag=tag, usgs_id=g["usgs_id"]))
+                tag="nearby", usgs_id=g["usgs_id"]))
     except Exception as exc:
         logger.warning("NWPS gauge listing failed: %s", exc)
 

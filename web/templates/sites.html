@@ -92,7 +92,10 @@
   {% for s in sites %}
   <tr>
     <td><code>{{ s.site_number }}</code></td>
-    <td>{{ s.station_name or "—" }}</td>
+    <td>{{ s.station_name or "—" }}
+      {% if s.origin == "user" %}<span class="badge bg-info text-dark ms-1">User-added</span>{% endif %}
+      <span class="text-muted small ms-1">{{ s.page_count }} page{{ "" if s.page_count == 1 else "s" }}</span>
+    </td>
     <td>{{ "Discharge" if s.parameter_code == "00060" else "Gage height" }}</td>
     <td>
       {% if s.stale %}

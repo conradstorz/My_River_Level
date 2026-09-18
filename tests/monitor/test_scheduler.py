@@ -66,3 +66,20 @@ def test_is_reminder_due_when_old_notification(tmp_db):
     conn.close()
     # 25 hours ago — due (interval is 24h for HIGH)
     assert is_reminder_due(site_id=1, severity="HIGH", db_path=tmp_db) is True
+
+
+def test_failed_sweep_is_retried_on_the_next_pass(tmp_db, monkeypatch):
+    import queue
+    from unittest.mock import patch
+    from monitor.scheduler import SchedulerThread
+    thread = SchedulerThread(queue.Queue(), db_path=tmp_db)
+    thread._last_sweep = -10_000.0
+    with patch("monitor.scheduler.sweep", side_effect=RuntimeError("db down")) as sweep:
+        thread._maybe_sweep()
+        thread._maybe_sweep()
+    assert sweep.call_count == 2            # not throttled after a failure
+    with patch("monitor.scheduler.sweep", return_value={}) as sweep:
+        thread._maybe_sweep()
+        thread._maybe_sweep()
+    assert sweep.call_count == 1            # throttled after a success
+

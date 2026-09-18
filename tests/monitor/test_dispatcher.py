@@ -214,7 +214,10 @@ def test_dispatcher_sends_reminder_to_page_subscribers_of_that_site(tmp_db):
 
 def test_dispatcher_sends_trend_alert_and_logs_it(tmp_db):
     init_db(tmp_db)
-    _, site_id = _page_with_site(tmp_db, channel_id="trend-sub")
+    page_id, site_id = _page_with_site(tmp_db, channel_id="trend-sub")
+    # Trend alerts require the 'all' sensitivity dial; set it explicitly so
+    # the test does not depend on the column default.
+    _set_page(tmp_db, page_id, sensitivity="all")
 
     mock_adapter = MagicMock()
     mock_adapter.channel = "telegram"
@@ -334,3 +337,129 @@ def test_noaa_transition_dispatched(tmp_db):
     assert args[0] == "+15025551234"
     assert "MLUK2" in args[1] or "McAlpine" in args[1]
     assert "Action" in args[1]
+
+
+def _set_page(tmp_db, page_id, **fields):
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    for key, value in fields.items():
+        cur.execute(f"UPDATE user_pages SET {key}=%s WHERE id=%s", (value, page_id))
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def _transition_item(site_id, new_severity):
+    return {"type": "transition", "data": {
+        "site_id": site_id, "site_number": "12345678", "station_name": "Test",
+        "previous_severity": "NORMAL", "new_severity": new_severity,
+        "current_value": 1500.0, "unit": "cfs", "percentile": 91.0,
+        "direction": "RISING",
+    }}
+
+
+def _adapter():
+    mock_adapter = MagicMock()
+    mock_adapter.channel = "telegram"
+    mock_adapter.send.return_value = True
+    return mock_adapter
+
+
+def test_floods_page_does_not_receive_a_high_transition(tmp_db):
+    init_db(tmp_db)
+    page_id, site_id = _page_with_site(tmp_db)
+    _set_page(tmp_db, page_id, sensitivity="floods")
+    adapter = _adapter()
+    q = queue.Queue()
+    q.put(_transition_item(site_id, "HIGH"))
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_not_called()
+
+
+def test_floods_page_receives_a_severe_high_transition(tmp_db):
+    init_db(tmp_db)
+    page_id, site_id = _page_with_site(tmp_db)
+    _set_page(tmp_db, page_id, sensitivity="floods")
+    adapter = _adapter()
+    q = queue.Queue()
+    q.put(_transition_item(site_id, "SEVERE HIGH"))
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_called_once()
+
+
+def test_floods_page_receives_the_all_clear_transition(tmp_db):
+    init_db(tmp_db)
+    page_id, site_id = _page_with_site(tmp_db)
+    _set_page(tmp_db, page_id, sensitivity="floods")
+    adapter = _adapter()
+    q = queue.Queue()
+    q.put({"type": "transition", "data": {
+        "site_id": site_id, "site_number": "12345678", "station_name": "Test",
+        "previous_severity": "SEVERE HIGH", "new_severity": "NORMAL",
+        "current_value": 500.0, "unit": "cfs", "percentile": 40.0,
+        "direction": "FALLING",
+    }})
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_called_once()
+
+
+def test_unusual_page_skips_trend_but_all_page_gets_it(tmp_db):
+    init_db(tmp_db)
+    page_id, site_id = _page_with_site(tmp_db)
+    _set_page(tmp_db, page_id, sensitivity="unusual")
+    trend = {"type": "trend", "data": {
+        "site_id": site_id, "site_number": "12345678", "station_name": "Test",
+        "unit": "ft", "direction": "RISING", "delta": 2.5, "hours": 6.0,
+        "start_value": 10.0, "end_value": 12.5,
+    }}
+    adapter = _adapter()
+    q = queue.Queue()
+    q.put(trend)
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_not_called()
+    _set_page(tmp_db, page_id, sensitivity="all")
+    q.put(trend)
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_called_once()
+
+
+def test_paused_page_receives_nothing(tmp_db):
+    init_db(tmp_db)
+    page_id, site_id = _page_with_site(tmp_db)
+    _set_page(tmp_db, page_id, status="paused")
+    adapter = _adapter()
+    q = queue.Queue()
+    q.put(_transition_item(site_id, "SEVERE HIGH"))
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_not_called()
+
+
+def test_paused_page_receives_no_noaa_transition(tmp_db):
+    init_db(tmp_db)
+    from db.models import (create_user_page, get_page_by_public_token,
+                           get_or_create_noaa_gauge, link_page_gauge,
+                           add_page_subscriber)
+    pub, _ = create_user_page("P", tmp_db)
+    page = get_page_by_public_token(pub, tmp_db)
+    gauge_id = get_or_create_noaa_gauge("MLUK2", "M", 21.0, 23.0, 30.0, 38.0, tmp_db)
+    link_page_gauge(page["id"], gauge_id, tmp_db)
+    add_page_subscriber(page["id"], "telegram", "chat9", "S", tmp_db)
+    _set_page(tmp_db, page["id"], status="paused")
+    adapter = _adapter()
+    q = queue.Queue()
+    q.put({"type": "noaa_transition", "data": {
+        "gauge_id": gauge_id, "lid": "MLUK2", "station_name": "M",
+        "previous_severity": "Normal", "new_severity": "Action",
+        "current_stage": 22.0}})
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_not_called()
+
+
+def test_direct_item_sends_to_one_chat_without_subscribers(tmp_db):
+    init_db(tmp_db)
+    adapter = _adapter()
+    q = queue.Queue()
+    q.put({"type": "direct", "data": {
+        "channel": "telegram", "channel_id": "777", "message": "hello"}})
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_called_once_with("777", "hello")

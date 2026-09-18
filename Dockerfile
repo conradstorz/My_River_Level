@@ -7,6 +7,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# tests/ rides along in the build context so Dockerfile.test can use it (see
+# .dockerignore); it has no business in the runtime image.
+RUN rm -rf tests
+
 RUN mkdir -p logs
 
 # Run as a non-root user. /app/logs must be owned by `river` before the named

@@ -40,6 +40,10 @@ DEFAULT_SETTINGS = {
     "rate_change_min_interval_hours": "6",
     "site_stale_hours": "6",
     "forecast_poll_hours": "6",
+    # Pin onboarding
+    "discovery_reach_km": "50",
+    "public_base_url": "",
+    "telegram_bot_username": "",
 }
 
 SCHEMA_STATEMENTS = [
@@ -168,6 +172,27 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS forecast_checked_at TIMESTAMPTZ",
     "CREATE INDEX IF NOT EXISTS idx_site_conditions_site_id ON site_conditions (site_id, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_notifications_site_trigger ON notifications (site_id, trigger_type, id DESC)",
+    # Pin-on-a-map onboarding (spec 2026-09-17). A page owned by a Telegram
+    # chat carries its pin, river, sensitivity dial and lifecycle status;
+    # sources provisioned by users are marked so the retirement sweep can
+    # deactivate them once nobody references them, and never touch admin rows.
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS owner_chat_id BIGINT",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS pin_lat DOUBLE PRECISION",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS pin_lon DOUBLE PRECISION",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS river_name TEXT",
+    # Default 'all' so existing admin-created pages keep every alert they
+    # already got before this column existed; create_pin_page overrides this
+    # to 'unusual' explicitly for new pin pages.
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS sensitivity TEXT NOT NULL DEFAULT 'all' "
+    "CHECK (sensitivity IN ('floods', 'unusual', 'all'))",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' "
+    "CHECK (status IN ('pending', 'active', 'paused', 'stopped'))",
+    "ALTER TABLE sites ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'admin' "
+    "CHECK (origin IN ('admin', 'user'))",
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'admin' "
+    "CHECK (origin IN ('admin', 'user'))",
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS active INTEGER NOT NULL DEFAULT 1",
+    "CREATE INDEX IF NOT EXISTS idx_user_pages_owner_chat ON user_pages (owner_chat_id)",
 ]
 
 
@@ -276,18 +301,204 @@ def get_page_by_edit_token(token, db_path=None):
     return dict(row) if row else None
 
 
+SENSITIVITY_LEVELS = ("floods", "unusual", "all")
+PAGE_STATUSES = ("pending", "active", "paused", "stopped")
+PIN_PAGE_NAME = "My river"
+
+
+def create_pin_page(owner_chat_id, db_path=None):
+    """Create a pending pin page, optionally owned by a Telegram chat; return its row."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """INSERT INTO user_pages
+               (public_token, edit_token, page_name, owner_chat_id, status, sensitivity)
+               VALUES (%s, %s, %s, %s, 'pending', 'unusual') RETURNING *""",
+            (str(uuid.uuid4()), str(uuid.uuid4()), PIN_PAGE_NAME, owner_chat_id)
+        )
+        row = cur.fetchone()
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return dict(row)
+
+
+def get_page_for_chat(chat_id, db_path=None):
+    """Return the newest non-stopped page owned by `chat_id`, or None."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT * FROM user_pages
+               WHERE owner_chat_id=%s AND status <> 'stopped'
+               ORDER BY id DESC LIMIT 1""",
+            (int(chat_id),)
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+    return dict(row) if row else None
+
+
+def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
+    """Make `chat_id` the owner and an active subscriber of the page.
+
+    Returns the updated row, or None when the token is unknown, the page is
+    stopped, or another chat already owns it. A page that already has its
+    pin becomes active; one still waiting for a pin stays pending.
+    """
+    chat_id = int(chat_id)
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM user_pages WHERE edit_token=%s", (edit_token,))
+        page = cur.fetchone()
+        if page is None or page["status"] == "stopped":
+            return None
+        if page["owner_chat_id"] is not None and page["owner_chat_id"] != chat_id:
+            return None
+        # Only a pending page is promoted: re-binding a paused page (the
+        # owner tapping the deep link again) must not silently undo the pause.
+        if page["status"] == "pending" and page["pin_lat"] is not None:
+            new_status = "active"
+        else:
+            new_status = page["status"]
+        cur.execute(
+            "UPDATE user_pages SET owner_chat_id=%s, status=%s WHERE id=%s RETURNING *",
+            (chat_id, new_status, page["id"])
+        )
+        updated = cur.fetchone()
+        cur.execute(
+            """INSERT INTO page_subscribers
+               (page_id, channel, channel_id, display_name, status)
+               VALUES (%s, 'telegram', %s, %s, 'active')
+               ON CONFLICT (page_id, channel, channel_id)
+               DO UPDATE SET display_name = EXCLUDED.display_name, status = 'active'""",
+            (page["id"], str(chat_id), display_name or "Telegram User")
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return dict(updated)
+
+
+def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges,
+             db_path=None):
+    """Store a page's pin and replace its sources, provisioning any new ones.
+
+    Everything happens in one transaction so a failure part-way leaves the
+    page as it was. Sources are inserted with origin='user'; an existing row
+    keeps its origin but is reactivated, so a gauge the retirement sweep
+    switched off comes back the moment someone selects it again.
+    """
+    if sensitivity not in SENSITIVITY_LEVELS:
+        raise ValueError(f"unknown sensitivity {sensitivity!r}")
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """UPDATE user_pages
+               SET pin_lat=%s, pin_lon=%s, river_name=%s, sensitivity=%s,
+                   status = CASE WHEN status = 'pending' AND owner_chat_id IS NOT NULL
+                                 THEN 'active' ELSE status END
+               WHERE id=%s""",
+            (lat, lon, river_name, sensitivity, page_id)
+        )
+        cur.execute("DELETE FROM page_sites WHERE page_id=%s", (page_id,))
+        cur.execute("DELETE FROM page_noaa_gauges WHERE page_id=%s", (page_id,))
+        for site in usgs_sites:
+            cur.execute(
+                """INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
+                   VALUES (%s, %s, %s, 'user', 1)
+                   ON CONFLICT (site_number) DO UPDATE SET active = 1
+                   RETURNING id""",
+                (site["site_number"], site.get("station_name", ""),
+                 site.get("parameter_code", "00065"))
+            )
+            site_id = cur.fetchone()["id"]
+            cur.execute(
+                "INSERT INTO page_sites (page_id, site_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (page_id, site_id)
+            )
+        for gauge in noaa_gauges:
+            cur.execute(
+                """INSERT INTO noaa_gauges
+                   (lid, station_name, action_stage, minor_flood_stage,
+                    moderate_flood_stage, major_flood_stage, origin, active)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'user', 1)
+                   ON CONFLICT (lid) DO UPDATE SET active = 1
+                   RETURNING id""",
+                (gauge["lid"], gauge.get("station_name", ""),
+                 gauge.get("action_stage"), gauge.get("minor_flood_stage"),
+                 gauge.get("moderate_flood_stage"), gauge.get("major_flood_stage"))
+            )
+            gauge_id = cur.fetchone()["id"]
+            cur.execute(
+                """INSERT INTO page_noaa_gauges (page_id, noaa_gauge_id)
+                   VALUES (%s, %s) ON CONFLICT DO NOTHING""",
+                (page_id, gauge_id)
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_page_sensitivity(page_id, sensitivity, db_path=None):
+    """Set the page's sensitivity dial; ValueError on an unknown level."""
+    if sensitivity not in SENSITIVITY_LEVELS:
+        raise ValueError(f"unknown sensitivity {sensitivity!r}")
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE user_pages SET sensitivity=%s WHERE id=%s", (sensitivity, page_id))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_page_status(page_id, status, db_path=None):
+    """Set the page's lifecycle status; ValueError on an unknown status."""
+    if status not in PAGE_STATUSES:
+        raise ValueError(f"unknown status {status!r}")
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE user_pages SET status=%s WHERE id=%s", (status, page_id))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
-                              moderate_stage, major_stage, db_path=None):
-    """Insert gauge if not present; return its id."""
+                              moderate_stage, major_stage, db_path=None,
+                              origin="admin"):
+    """Insert gauge if not present; return its id.
+
+    An existing gauge keeps its original origin but is reactivated: a user
+    re-selecting a gauge the retirement sweep switched off must get polling
+    back without admin help.
+    """
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         cur.execute(
             """INSERT INTO noaa_gauges
-               (lid, station_name, action_stage, minor_flood_stage, moderate_flood_stage, major_flood_stage)
-               VALUES (%s, %s, %s, %s, %s, %s)
-               ON CONFLICT (lid) DO NOTHING""",
-            (lid, station_name, action_stage, minor_stage, moderate_stage, major_stage)
+               (lid, station_name, action_stage, minor_flood_stage,
+                moderate_flood_stage, major_flood_stage, origin)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (lid) DO UPDATE SET active = 1""",
+            (lid, station_name, action_stage, minor_stage, moderate_stage,
+             major_stage, origin)
         )
         conn.commit()
         cur.execute("SELECT id FROM noaa_gauges WHERE lid=%s", (lid,))
@@ -314,12 +525,15 @@ def update_noaa_gauge_condition(lid, current_stage, severity, db_path=None):
         conn.close()
 
 
-def get_all_noaa_gauges(db_path=None):
-    """Return every noaa_gauges row as a list of dicts."""
+def get_all_noaa_gauges(db_path=None, active_only=False):
+    """Return noaa_gauges rows as dicts; `active_only` skips retired gauges."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM noaa_gauges")
+        if active_only:
+            cur.execute("SELECT * FROM noaa_gauges WHERE active=1 ORDER BY id")
+        else:
+            cur.execute("SELECT * FROM noaa_gauges ORDER BY id")
         rows = cur.fetchall()
     finally:
         cur.close()
@@ -449,19 +663,21 @@ def get_active_page_subscribers(page_id, db_path=None):
 
 
 def get_page_subscribers_for_gauge(gauge_id, db_path=None):
-    """Return all active page_subscribers for every active page linked to this gauge.
+    """Return active page_subscribers (plus the page's sensitivity) for every
+    live page linked to this gauge.
 
-    Deactivating a page must silence its alerts, so inactive pages are
-    excluded here the same way ``get_page_subscribers_for_site`` excludes them.
+    A page is live when the admin flag `active` is set AND its lifecycle
+    `status` is 'active' — paused, stopped and pending pages are silent.
     """
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT ps.* FROM page_subscribers ps
+            """SELECT ps.*, up.sensitivity FROM page_subscribers ps
                JOIN page_noaa_gauges png ON png.page_id = ps.page_id
                JOIN user_pages up ON up.id = ps.page_id
-               WHERE png.noaa_gauge_id=%s AND ps.status='active' AND up.active=1""",
+               WHERE png.noaa_gauge_id=%s AND ps.status='active'
+                 AND up.active=1 AND up.status='active'""",
             (gauge_id,)
         )
         rows = cur.fetchall()
@@ -540,15 +756,21 @@ def get_pages_for_site(site_id, db_path=None):
 
 
 def get_page_subscribers_for_site(site_id, db_path=None):
-    """Return all active page_subscribers for every active page linked to this site."""
+    """Return active page_subscribers (plus the page's sensitivity) for every
+    live page linked to this site.
+
+    A page is live when the admin flag `active` is set AND its lifecycle
+    `status` is 'active' — paused, stopped and pending pages are silent.
+    """
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT ps.* FROM page_subscribers ps
+            """SELECT ps.*, up.sensitivity FROM page_subscribers ps
                JOIN page_sites pst ON pst.page_id = ps.page_id
                JOIN user_pages up ON up.id = ps.page_id
-               WHERE pst.site_id=%s AND ps.status='active' AND up.active=1
+               WHERE pst.site_id=%s AND ps.status='active'
+                 AND up.active=1 AND up.status='active'
                ORDER BY ps.id""",
             (site_id,)
         )
@@ -600,10 +822,13 @@ def get_sites_with_health(db_path=None):
     cur = conn.cursor()
     try:
         cur.execute(
-            """SELECT *,
-                      (last_success_at IS NULL
-                       OR last_success_at < NOW() - (%s * INTERVAL '1 hour')) AS stale
-               FROM sites ORDER BY id""",
+            """SELECT s.*,
+                      (s.last_success_at IS NULL
+                       OR s.last_success_at < NOW() - (%s * INTERVAL '1 hour')) AS stale,
+                      (SELECT COUNT(*) FROM page_sites ps
+                         JOIN user_pages up ON up.id = ps.page_id
+                        WHERE ps.site_id = s.id AND up.status IN ('active', 'paused')) AS page_count
+               FROM sites s ORDER BY s.id""",
             (stale_hours,)
         )
         rows = cur.fetchall()

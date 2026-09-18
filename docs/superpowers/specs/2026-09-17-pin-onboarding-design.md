@@ -143,7 +143,7 @@ All changes are additive migrations in `db/models.py`, applied by the existing
 | `owner_chat_id` | BIGINT NULL | Telegram chat id; NULL = admin-created or unbound web-first page |
 | `pin_lat`, `pin_lon` | DOUBLE PRECISION NULL | |
 | `river_name` | TEXT NULL | From NLDI GNIS name |
-| `sensitivity` | TEXT NOT NULL DEFAULT 'unusual' | CHECK IN ('floods','unusual','all') |
+| `sensitivity` | TEXT NOT NULL DEFAULT 'all' | CHECK IN ('floods','unusual','all'); default 'all' so existing admin pages keep every alert unchanged, `create_pin_page` sets 'unusual' explicitly for new pin pages |
 | `status` | TEXT NOT NULL DEFAULT 'active' | CHECK IN ('pending','active','paused','stopped') |
 
 The existing `active` flag stays as the admin kill switch; alert routing
@@ -167,10 +167,12 @@ first poll.
 
 **Retirement sweep** (new function called from the scheduler thread once per
 hour): deactivate (`active = 0`) any `sites` or `noaa_gauges` row with
-`origin = 'user'` that has no reference from a page whose `status` is
-`active` or `paused`. Rows are never deleted; history and conditions are
-kept. Re-selecting a retired site reactivates it. Admin-origin rows are never
-touched. The sweep also deletes stale pending pages as above.
+`origin = 'user'` that has no reference from a live page (`status` `active`
+or `paused`, or `pending` with a pin saved). Rows are never deleted; history
+and conditions are kept. Re-selecting a retired site reactivates it.
+Admin-origin rows are never touched. The sweep also deletes stale pending
+pages as above. A pinned page still `pending` after 7 days (never connected
+to Telegram) is deleted too, and its sources retire on the following sweep.
 
 **Sensitivity at routing time.** The pollers keep detecting everything. The
 existing per-page routing in `polling.py` / `noaa_polling.py` (subscribers of
