@@ -19,7 +19,9 @@ from db.models import (
     get_page_by_public_token,
     get_setting,
     set_page_subscriber_status,
+    set_setting,
 )
+from monitor.adapters.telegram_commands import PinCommands, start_chat
 
 logger = logging.getLogger(__name__)
 
@@ -217,16 +219,14 @@ class TelegramAdapter(threading.Thread):
     # ── Inbound (bot handlers) ────────────────────────────────────────────────
 
     async def _handle_start(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
-        """Handle /start: record a pending registration and explain the commands."""
+        """Handle /start [token]: create or bind this chat's pin page and send the map link."""
         chat_id = str(update.effective_chat.id)
+        name = update.effective_user.full_name or "Telegram User"
+        args = getattr(context, "args", None) or []
         await asyncio.to_thread(_record_pending_registration, chat_id, self.db_path)
-        await update.message.reply_text(
-            "Welcome to the River Level Monitor!\n"
-            "Send /subscribe <page code> to get alerts for a specific river page "
-            "— the code is in your page's web address.\n"
-            "Send /subscribe on its own for broadcast announcements only.\n"
-            "Other commands: /mypages, /unsubscribe"
-        )
+        reply = await asyncio.to_thread(
+            start_chat, chat_id, name, args[0] if args else "", self.db_path)
+        await update.message.reply_text(reply)
 
     async def _handle_subscribe(self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"):
         """Handle /subscribe [page code]: subscribe to one page, or to broadcasts."""
@@ -311,15 +311,25 @@ class TelegramAdapter(threading.Thread):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
 
+        async def _remember_username(app):
+            try:
+                me = await app.bot.get_me()
+                await asyncio.to_thread(
+                    set_setting, "telegram_bot_username", me.username or "", self.db_path)
+            except Exception:
+                logger.exception("Could not read the bot's username")
+
         self._app = (
             Application.builder()
             .token(token)
+            .post_init(_remember_username)
             .build()
         )
         self._app.add_handler(CommandHandler("start", self._handle_start))
         self._app.add_handler(CommandHandler("subscribe", self._handle_subscribe))
         self._app.add_handler(CommandHandler("unsubscribe", self._handle_unsubscribe))
         self._app.add_handler(CommandHandler("mypages", self._handle_mypages))
+        PinCommands(self.db_path).register(self._app)
 
         self._watch_stop = threading.Event()
         watcher = threading.Thread(
