@@ -88,3 +88,34 @@ def test_stale_pending_page_with_a_pin_is_kept(tmp_db):
           "UPDATE user_pages SET created_at=(NOW() - INTERVAL '25 hours')::TEXT WHERE id=%s",
           (page["id"],))
     assert sweep(tmp_db)["pending_pages"] == 0
+
+
+def test_pinned_pending_page_keeps_its_sources(tmp_db):
+    page = create_pin_page(None, tmp_db)          # web-first, not yet bound
+    save_pin(page["id"], 38.0, -85.0, "Ohio", "unusual", USGS, NOAA, tmp_db)
+    result = sweep(tmp_db)
+    assert result == {"sites": 0, "gauges": 0, "pending_pages": 0}
+    assert _active(tmp_db, "sites", "site_number", "03294500") == 1
+    assert _active(tmp_db, "noaa_gauges", "lid", "MLUK2") == 1
+
+
+def test_pinned_pending_page_is_deleted_after_a_week(tmp_db):
+    page = create_pin_page(None, tmp_db)
+    save_pin(page["id"], 38.0, -85.0, "Ohio", "unusual", USGS, [], tmp_db)
+    _exec(tmp_db,
+          "UPDATE user_pages SET created_at=(NOW() - INTERVAL '8 days')::TEXT WHERE id=%s",
+          (page["id"],))
+    first = sweep(tmp_db)
+    assert first["pending_pages"] == 1
+    second = sweep(tmp_db)                       # page gone → source now unreferenced
+    assert second["sites"] == 1
+    assert _active(tmp_db, "sites", "site_number", "03294500") == 0
+
+
+def test_pinned_pending_page_younger_than_a_week_is_kept(tmp_db):
+    page = create_pin_page(None, tmp_db)
+    save_pin(page["id"], 38.0, -85.0, "Ohio", "unusual", USGS, [], tmp_db)
+    _exec(tmp_db,
+          "UPDATE user_pages SET created_at=(NOW() - INTERVAL '6 days')::TEXT WHERE id=%s",
+          (page["id"],))
+    assert sweep(tmp_db)["pending_pages"] == 0

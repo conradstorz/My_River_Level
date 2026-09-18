@@ -167,10 +167,12 @@ first poll.
 
 **Retirement sweep** (new function called from the scheduler thread once per
 hour): deactivate (`active = 0`) any `sites` or `noaa_gauges` row with
-`origin = 'user'` that has no reference from a page whose `status` is
-`active` or `paused`. Rows are never deleted; history and conditions are
-kept. Re-selecting a retired site reactivates it. Admin-origin rows are never
-touched. The sweep also deletes stale pending pages as above.
+`origin = 'user'` that has no reference from a live page (`status` `active`
+or `paused`, or `pending` with a pin saved). Rows are never deleted; history
+and conditions are kept. Re-selecting a retired site reactivates it.
+Admin-origin rows are never touched. The sweep also deletes stale pending
+pages as above. A pinned page still `pending` after 7 days (never connected
+to Telegram) is deleted too, and its sources retire on the following sweep.
 
 **Sensitivity at routing time.** The pollers keep detecting everything. The
 existing per-page routing in `polling.py` / `noaa_polling.py` (subscribers of
