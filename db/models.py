@@ -298,6 +298,178 @@ def get_page_by_edit_token(token, db_path=None):
     return dict(row) if row else None
 
 
+SENSITIVITY_LEVELS = ("floods", "unusual", "all")
+PAGE_STATUSES = ("pending", "active", "paused", "stopped")
+PIN_PAGE_NAME = "My river"
+
+
+def create_pin_page(owner_chat_id, db_path=None):
+    """Create a pending pin page, optionally owned by a Telegram chat; return its row."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """INSERT INTO user_pages
+               (public_token, edit_token, page_name, owner_chat_id, status)
+               VALUES (%s, %s, %s, %s, 'pending') RETURNING *""",
+            (str(uuid.uuid4()), str(uuid.uuid4()), PIN_PAGE_NAME, owner_chat_id)
+        )
+        row = cur.fetchone()
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return dict(row)
+
+
+def get_page_for_chat(chat_id, db_path=None):
+    """Return the newest non-stopped page owned by `chat_id`, or None."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT * FROM user_pages
+               WHERE owner_chat_id=%s AND status <> 'stopped'
+               ORDER BY id DESC LIMIT 1""",
+            (int(chat_id),)
+        )
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+    return dict(row) if row else None
+
+
+def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
+    """Make `chat_id` the owner and an active subscriber of the page.
+
+    Returns the updated row, or None when the token is unknown, the page is
+    stopped, or another chat already owns it. A page that already has its
+    pin becomes active; one still waiting for a pin stays pending.
+    """
+    chat_id = int(chat_id)
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM user_pages WHERE edit_token=%s", (edit_token,))
+        page = cur.fetchone()
+        if page is None or page["status"] == "stopped":
+            return None
+        if page["owner_chat_id"] is not None and page["owner_chat_id"] != chat_id:
+            return None
+        new_status = "active" if page["pin_lat"] is not None else page["status"]
+        cur.execute(
+            "UPDATE user_pages SET owner_chat_id=%s, status=%s WHERE id=%s RETURNING *",
+            (chat_id, new_status, page["id"])
+        )
+        updated = cur.fetchone()
+        cur.execute(
+            """INSERT INTO page_subscribers
+               (page_id, channel, channel_id, display_name, status)
+               VALUES (%s, 'telegram', %s, %s, 'active')
+               ON CONFLICT (page_id, channel, channel_id)
+               DO UPDATE SET display_name = EXCLUDED.display_name, status = 'active'""",
+            (page["id"], str(chat_id), display_name or "Telegram User")
+        )
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+    return dict(updated)
+
+
+def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges,
+             db_path=None):
+    """Store a page's pin and replace its sources, provisioning any new ones.
+
+    Everything happens in one transaction so a failure part-way leaves the
+    page as it was. Sources are inserted with origin='user'; an existing row
+    keeps its origin but is reactivated, so a gauge the retirement sweep
+    switched off comes back the moment someone selects it again.
+    """
+    if sensitivity not in SENSITIVITY_LEVELS:
+        raise ValueError(f"unknown sensitivity {sensitivity!r}")
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """UPDATE user_pages
+               SET pin_lat=%s, pin_lon=%s, river_name=%s, sensitivity=%s,
+                   status = CASE WHEN owner_chat_id IS NULL THEN 'pending' ELSE 'active' END
+               WHERE id=%s""",
+            (lat, lon, river_name, sensitivity, page_id)
+        )
+        cur.execute("DELETE FROM page_sites WHERE page_id=%s", (page_id,))
+        cur.execute("DELETE FROM page_noaa_gauges WHERE page_id=%s", (page_id,))
+        for site in usgs_sites:
+            cur.execute(
+                """INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
+                   VALUES (%s, %s, %s, 'user', 1)
+                   ON CONFLICT (site_number) DO UPDATE SET active = 1
+                   RETURNING id""",
+                (site["site_number"], site.get("station_name", ""),
+                 site.get("parameter_code", "00065"))
+            )
+            site_id = cur.fetchone()["id"]
+            cur.execute(
+                "INSERT INTO page_sites (page_id, site_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                (page_id, site_id)
+            )
+        for gauge in noaa_gauges:
+            cur.execute(
+                """INSERT INTO noaa_gauges
+                   (lid, station_name, action_stage, minor_flood_stage,
+                    moderate_flood_stage, major_flood_stage, origin, active)
+                   VALUES (%s, %s, %s, %s, %s, %s, 'user', 1)
+                   ON CONFLICT (lid) DO UPDATE SET active = 1
+                   RETURNING id""",
+                (gauge["lid"], gauge.get("station_name", ""),
+                 gauge.get("action_stage"), gauge.get("minor_flood_stage"),
+                 gauge.get("moderate_flood_stage"), gauge.get("major_flood_stage"))
+            )
+            gauge_id = cur.fetchone()["id"]
+            cur.execute(
+                """INSERT INTO page_noaa_gauges (page_id, noaa_gauge_id)
+                   VALUES (%s, %s) ON CONFLICT DO NOTHING""",
+                (page_id, gauge_id)
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_page_sensitivity(page_id, sensitivity, db_path=None):
+    """Set the page's sensitivity dial; ValueError on an unknown level."""
+    if sensitivity not in SENSITIVITY_LEVELS:
+        raise ValueError(f"unknown sensitivity {sensitivity!r}")
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE user_pages SET sensitivity=%s WHERE id=%s", (sensitivity, page_id))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
+def set_page_status(page_id, status, db_path=None):
+    """Set the page's lifecycle status; ValueError on an unknown status."""
+    if status not in PAGE_STATUSES:
+        raise ValueError(f"unknown status {status!r}")
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("UPDATE user_pages SET status=%s WHERE id=%s", (status, page_id))
+        conn.commit()
+    finally:
+        cur.close()
+        conn.close()
+
+
 def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
                               moderate_stage, major_stage, db_path=None,
                               origin="admin"):
