@@ -7,7 +7,9 @@ NHDPlus flowline and can walk the main stem upstream (UM) and downstream
 follows the channel and excludes tributaries — so it is tried first. When
 the pin is off the network, navigation finds nothing, or NLDI is down, the
 existing bounding-box site search fills the list instead, tagged "nearest",
-so the confirm screen is never empty for a bad reason.
+so the confirm screen is never empty for a bad reason. NLDI publishes no
+GNIS river name on either its position or comid endpoint, so the river
+name is instead derived from the names of the gauges found on the stem.
 
 NOAA gauges have no NLDI layer. Each proposed USGS site is looked up on the
 NWPS per-gauge endpoint (it resolves a USGS number to its LID), so a matched
@@ -21,6 +23,8 @@ from that step" and logs why, never raising to the caller.
 
 import logging
 import math
+import re
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 
 import dataretrieval.nwis as nwis
@@ -36,6 +40,23 @@ TIMEOUT = 15
 SNAP_MAX_KM = 2.0
 #: Parameters a site must report to be worth proposing; first match wins.
 WANTED_PARAMETERS = ("00065", "00060")
+
+#: Text that separates a river name from the location description that
+#: follows it in a USGS station name or NWPS gauge name, e.g. "OHIO RIVER
+#: AT LOUISVILLE, KY" or "S FK BEARGRASS CREEK NR LOUISVILLE, KY".
+_LOCATION_MARKERS = (
+    " AT ", " NR ", " NEAR ", " BL ", " BLW ", " BELOW ",
+    " AB ", " ABV ", " ABOVE ", " US OF ", " DS OF ", " @ ", " - ", ",",
+)
+_LOCATION_MARKER_RE = re.compile(
+    "|".join(re.escape(marker) for marker in _LOCATION_MARKERS), re.IGNORECASE)
+
+#: Whole-word abbreviations expanded before title-casing a derived river name.
+_RIVER_WORD_ABBREVIATIONS = {
+    "R": "River", "RV": "River", "CR": "Creek", "CK": "Creek", "BR": "Branch",
+    "FK": "Fork", "S": "South", "N": "North", "E": "East", "W": "West",
+    "M": "Middle", "LK": "Lake", "BYU": "Bayou", "SLU": "Slough",
+}
 
 
 @dataclass
@@ -156,6 +177,40 @@ def _bbox_sites(lat, lon, radius_miles):
     return out
 
 
+def _normalize_river_name(prefix):
+    """Expand abbreviated words in `prefix` and title-case the result."""
+    words = prefix.split()
+    expanded = [_RIVER_WORD_ABBREVIATIONS.get(word.upper(), word) for word in words]
+    return " ".join(expanded).title()
+
+
+def river_name_from_gauges(names):
+    """Derive a river name from gauge station names, e.g. "OHIO RIVER AT
+    LOUISVILLE, KY" -> "Ohio River". Returns the most common normalised
+    name (ties broken by first occurrence), or None if nothing usable.
+    """
+    counts = Counter()
+    first_seen = []
+    for raw in names or []:
+        if not raw:
+            continue
+        match = _LOCATION_MARKER_RE.search(raw)
+        if not match:
+            continue
+        prefix = raw[:match.start()].strip()
+        if not prefix:
+            continue
+        normalized = _normalize_river_name(prefix)
+        if not normalized:
+            continue
+        if normalized not in counts:
+            first_seen.append(normalized)
+        counts[normalized] += 1
+    if not counts:
+        return None
+    return max(first_seen, key=lambda name: counts[name])
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 def discover(lat, lon, *, reach_km, fallback_radius_miles):
@@ -235,6 +290,15 @@ def discover(lat, lon, *, reach_km, fallback_radius_miles):
                 tag="nearby", usgs_id=g["usgs_id"]))
     except Exception as exc:
         logger.warning("NWPS gauge listing failed: %s", exc)
+
+    if river_name is None and snap == "on_network":
+        # NWPS names are cleaner than USGS station names, so prefer them;
+        # "nearby"/"nearest" candidates are excluded since they are not
+        # necessarily on the same river as the pin.
+        stem_tags = ("upstream", "downstream")
+        noaa_names = [c.name for c in candidates if c.kind == "noaa" and c.tag in stem_tags]
+        usgs_names = [c.name for c in candidates if c.kind == "usgs" and c.tag in stem_tags]
+        river_name = river_name_from_gauges(noaa_names + usgs_names)
 
     order = {"upstream": 0, "downstream": 1, "nearby": 2, "nearest": 2}
     candidates.sort(key=lambda c: (order.get(c.tag, 3), c.distance_km, c.kind))

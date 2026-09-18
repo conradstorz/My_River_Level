@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from monitor import pin_discovery
-from monitor.pin_discovery import Discovery, discover, haversine_km
+from monitor.pin_discovery import Discovery, discover, haversine_km, river_name_from_gauges
 
 PIN = (38.28, -85.76)  # Ohio River at Louisville
 
@@ -186,3 +186,30 @@ def test_to_dict_is_json_ready(nwps):
         result = discover(*PIN, reach_km=50, fallback_radius_miles=25)
     text = json.dumps(result.to_dict())
     assert '"kind": "usgs"' in text and '"tag": "upstream"' in text
+
+
+@pytest.mark.parametrize("names,expected", [
+    (["OHIO RIVER AT BIG FOUR BRIDGE AT LOUISVILLE, KY"], "Ohio River"),
+    (["OHIO R US OF MCALPINE DAM @ RRB AT LOUISVILLE, KY"], "Ohio River"),
+    (["OHIO RIVER AT MCALPINE DAM - HEADWATER"], "Ohio River"),
+    (["S FK BEARGRASS CREEK NR LOUISVILLE, KY"], "South Fork Beargrass Creek"),
+    (["Ohio River at McAlpine Upper"], "Ohio River"),
+    (["OHIO RIVER AT X", "OHIO R AT Y", "SALT RIVER NR Z"], "Ohio River"),
+    (["NO MARKER HERE"], None),
+    ([], None),
+])
+def test_river_name_from_gauges(names, expected):
+    assert river_name_from_gauges(names) == expected
+
+
+def test_river_name_derived_from_gauges_when_nldi_has_none(nwps):
+    nameless = {"type": "FeatureCollection", "features": [{
+        "type": "Feature",
+        "geometry": POSITION["features"][0]["geometry"],
+        "properties": {"comid": "1234567"},
+    }]}
+    with patch("monitor.pin_discovery.requests.get", side_effect=_nldi(position=nameless)), \
+         patch("monitor.pin_discovery.nwis.get_info", return_value=ALL_HAVE_STAGE):
+        result = discover(*PIN, reach_km=50, fallback_radius_miles=25)
+    assert result.snap == "on_network"
+    assert result.river_name == "Ohio River"
