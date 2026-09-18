@@ -43,7 +43,9 @@ pytest
 # Run the full test suite in Docker (requires the shared-postgres server to be
 # up). Builds a test image that includes tests/ and runs pytest inside the
 # Docker network against the shared server. Works even when the Docker daemon
-# is remote. The river_test database is auto-created if missing.
+# is remote. The river_test database is auto-created if missing. The CLI
+# machine has no buildx plugin, so .dockerignore no longer excludes tests/;
+# the production Dockerfile strips it back out with `RUN rm -rf tests`.
 docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm test
 
 # Run a specific test file
@@ -110,8 +112,11 @@ monitor/
   site_search.py        — Ranked USGS gauge search by name (Monitoring Locations OGC API)
   site_validation.py    — Validates USGS site numbers against the API
   phone_utils.py        — Phone number normalization for Twilio channels
+  pin_discovery.py      — Pin → gauges on the same main stem (USGS NLDI), bbox fallback
+  retirement.py         — Hourly sweep: deactivate unreferenced user-origin sources
   adapters/
     telegram.py         — Telegram Bot API
+    telegram_commands.py — /start map link, /settings, /sensitivity, /sources, /pause, /resume, /stop
     sms.py              — Twilio SMS
     whatsapp.py         — Twilio WhatsApp
     facebook.py         — Facebook Messenger webhook
@@ -119,6 +124,7 @@ web/
   app.py                — Flask app factory
   auth.py               — HTTP Basic guard; PUBLIC_ENDPOINTS allowlist
   health.py             — GET /healthz worker-thread liveness
+  ratelimit.py          — In-process sliding-window limiter for the public pin routes
   routes.py             — Dashboard, Sites, Subscribers, Settings, Broadcast,
                           user landing pages (/pages, /view, /edit, /admin/pages), webhooks
 db/
@@ -142,7 +148,7 @@ tests/
 
 All runtime settings are stored in PostgreSQL (connection via `DATABASE_URL` env var). There are no config files at runtime.
 
-Key settings stored in the DB: `poll_interval_minutes`, `low_percentile`, `high_percentile`, `very_low_percentile`, `very_high_percentile`, `reminder_low_high_hours`, `reminder_severe_hours`, `historical_start_year`, `search_radius_miles`, `rate_change_threshold_ft`, `rate_change_threshold_pct`, `rate_change_window_hours`, `rate_change_min_interval_hours`, `site_stale_hours`, `forecast_poll_hours`, and per-channel credentials (Telegram token, Twilio SID/token/numbers, Facebook page/verify tokens and app secret).
+Key settings stored in the DB: `poll_interval_minutes`, `low_percentile`, `high_percentile`, `very_low_percentile`, `very_high_percentile`, `reminder_low_high_hours`, `reminder_severe_hours`, `historical_start_year`, `search_radius_miles`, `rate_change_threshold_ft`, `rate_change_threshold_pct`, `rate_change_window_hours`, `rate_change_min_interval_hours`, `site_stale_hours`, `forecast_poll_hours`, `discovery_reach_km`, `public_base_url`, `telegram_bot_username`, and per-channel credentials (Telegram token, Twilio SID/token/numbers, Facebook page/verify tokens and app secret).
 
 Portal credentials are the exception: `ADMIN_USERNAME` and
 `ADMIN_PASSWORD_HASH` come from the environment, never the database — the
@@ -156,6 +162,14 @@ Alerts are routed per user, not broadcast. A landing page links to USGS sites
 reminder for a site goes only to the active subscribers of the active pages
 that reference it. The global `subscribers` table is used solely for manual
 broadcasts.
+
+Pin pages (`user_pages.owner_chat_id` set) are created from Telegram `/start`
+or from `GET /pin`. Saving the pin provisions the chosen USGS sites and NOAA
+gauges with `origin='user'`; `monitor/retirement.py` deactivates them once no
+active or paused page references them. Each page has a `sensitivity` dial
+(`floods` / `unusual` / `all`) applied by the dispatcher through
+`monitor.scheduler.alert_allowed`, and a lifecycle `status`
+(`pending` / `active` / `paused` / `stopped`); only `active` pages receive alerts.
 
 ### Gauge quality grading
 
@@ -183,6 +197,11 @@ Gauge search by name uses a separate service — the USGS Monitoring Locations
 OGC API (`https://api.waterdata.usgs.gov/ogcapi/v0/collections/monitoring-locations/items`),
 queried via `requests` in `monitor/site_search.py` (the `nwis` site service has
 no substring name search).
+
+Pin discovery uses the USGS Network Linked Data Index
+(`https://api.water.usgs.gov/nldi/linked-data`): `comid/position` snaps a point
+to a flowline; `comid/{comid}/navigation/UM|DM/nwissite` lists gauges along the
+main stem.
 
 ### NOAA API
 
