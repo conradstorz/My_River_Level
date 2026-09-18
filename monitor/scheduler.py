@@ -145,8 +145,11 @@ class SchedulerThread(threading.Thread):
         now = time.monotonic()
         if now - self._last_sweep < self.SWEEP_INTERVAL_SECONDS:
             return
-        self._last_sweep = now
         try:
             sweep(self.db_path)
         except Exception:
-            logger.exception("Retirement sweep failed")
+            # Leave _last_sweep alone so the next reminder pass (5 min) retries,
+            # instead of leaving stale rows for another hour.
+            logger.exception("Retirement sweep failed — will retry next pass")
+            return
+        self._last_sweep = now
