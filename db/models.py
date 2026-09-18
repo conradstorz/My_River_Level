@@ -40,6 +40,10 @@ DEFAULT_SETTINGS = {
     "rate_change_min_interval_hours": "6",
     "site_stale_hours": "6",
     "forecast_poll_hours": "6",
+    # Pin onboarding
+    "discovery_reach_km": "50",
+    "public_base_url": "",
+    "telegram_bot_username": "",
 }
 
 SCHEMA_STATEMENTS = [
@@ -168,6 +172,24 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS forecast_checked_at TIMESTAMPTZ",
     "CREATE INDEX IF NOT EXISTS idx_site_conditions_site_id ON site_conditions (site_id, id DESC)",
     "CREATE INDEX IF NOT EXISTS idx_notifications_site_trigger ON notifications (site_id, trigger_type, id DESC)",
+    # Pin-on-a-map onboarding (spec 2026-09-17). A page owned by a Telegram
+    # chat carries its pin, river, sensitivity dial and lifecycle status;
+    # sources provisioned by users are marked so the retirement sweep can
+    # deactivate them once nobody references them, and never touch admin rows.
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS owner_chat_id BIGINT",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS pin_lat DOUBLE PRECISION",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS pin_lon DOUBLE PRECISION",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS river_name TEXT",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS sensitivity TEXT NOT NULL DEFAULT 'unusual' "
+    "CHECK (sensitivity IN ('floods', 'unusual', 'all'))",
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' "
+    "CHECK (status IN ('pending', 'active', 'paused', 'stopped'))",
+    "ALTER TABLE sites ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'admin' "
+    "CHECK (origin IN ('admin', 'user'))",
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'admin' "
+    "CHECK (origin IN ('admin', 'user'))",
+    "ALTER TABLE noaa_gauges ADD COLUMN IF NOT EXISTS active INTEGER NOT NULL DEFAULT 1",
+    "CREATE INDEX IF NOT EXISTS idx_user_pages_owner_chat ON user_pages (owner_chat_id)",
 ]
 
 
@@ -277,17 +299,25 @@ def get_page_by_edit_token(token, db_path=None):
 
 
 def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
-                              moderate_stage, major_stage, db_path=None):
-    """Insert gauge if not present; return its id."""
+                              moderate_stage, major_stage, db_path=None,
+                              origin="admin"):
+    """Insert gauge if not present; return its id.
+
+    An existing gauge keeps its original origin but is reactivated: a user
+    re-selecting a gauge the retirement sweep switched off must get polling
+    back without admin help.
+    """
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
         cur.execute(
             """INSERT INTO noaa_gauges
-               (lid, station_name, action_stage, minor_flood_stage, moderate_flood_stage, major_flood_stage)
-               VALUES (%s, %s, %s, %s, %s, %s)
-               ON CONFLICT (lid) DO NOTHING""",
-            (lid, station_name, action_stage, minor_stage, moderate_stage, major_stage)
+               (lid, station_name, action_stage, minor_flood_stage,
+                moderate_flood_stage, major_flood_stage, origin)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (lid) DO UPDATE SET active = 1""",
+            (lid, station_name, action_stage, minor_stage, moderate_stage,
+             major_stage, origin)
         )
         conn.commit()
         cur.execute("SELECT id FROM noaa_gauges WHERE lid=%s", (lid,))
@@ -314,12 +344,15 @@ def update_noaa_gauge_condition(lid, current_stage, severity, db_path=None):
         conn.close()
 
 
-def get_all_noaa_gauges(db_path=None):
-    """Return every noaa_gauges row as a list of dicts."""
+def get_all_noaa_gauges(db_path=None, active_only=False):
+    """Return noaa_gauges rows as dicts; `active_only` skips retired gauges."""
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
-        cur.execute("SELECT * FROM noaa_gauges")
+        if active_only:
+            cur.execute("SELECT * FROM noaa_gauges WHERE active=1 ORDER BY id")
+        else:
+            cur.execute("SELECT * FROM noaa_gauges ORDER BY id")
         rows = cur.fetchall()
     finally:
         cur.close()

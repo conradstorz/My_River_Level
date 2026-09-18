@@ -16,7 +16,6 @@ logs/
 .gitignore
 
 # Development
-tests/
 docs/
 .worktrees/
 

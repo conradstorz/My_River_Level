@@ -52,7 +52,7 @@ class ForecastPollingThread(threading.Thread):
 
     def _poll(self):
         """Fetch and archive every gauge's forecast, then re-grade them all."""
-        gauges = get_all_noaa_gauges(self.db_path)
+        gauges = get_all_noaa_gauges(self.db_path, active_only=True)
         for gauge in gauges:
             lid = gauge["lid"]
             try:
