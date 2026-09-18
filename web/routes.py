@@ -701,9 +701,13 @@ def register_routes(app):
 
         usgs_sites, noaa_gauges, skipped = [], [], []
         for src in sources:
-            kind = (src or {}).get("kind")
-            ident = str((src or {}).get("id", "")).strip()
+            if not isinstance(src, dict):
+                skipped.append("invalid")
+                continue
+            kind = src.get("kind")
+            ident = str(src.get("id", "") or "").strip()
             if not ident:
+                skipped.append("invalid")
                 continue
             if kind == "usgs":
                 code = str(src.get("parameter_code") or "00065")

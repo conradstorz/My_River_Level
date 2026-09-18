@@ -155,6 +155,19 @@ def test_save_unowned_page_stays_pending_and_queues_nothing(client, tmp_db):
     assert q.empty()
 
 
+def test_save_tolerates_malformed_source_entries(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    body = {**SAVE_BODY, "sources": ["usgs", 123, None, {"kind": "usgs"},
+                                     {"kind": "usgs", "id": "03294500", "parameter_code": "00065"}]}
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site),          patch("web.routes.fetch_gauge_metadata", side_effect=_meta):
+        resp = client.post(f"/pin/{page['edit_token']}/save", json=body)
+    assert resp.status_code == 200, resp.data
+    assert resp.get_json()["skipped"] == ["invalid"] * 4
+    resp = client.post(f"/pin/{page['edit_token']}/save",
+                       json={**SAVE_BODY, "sources": ["usgs", 7]})
+    assert resp.status_code == 400
+
+
 def test_save_rejects_zero_sources_and_bad_sensitivity(client, tmp_db):
     page = create_pin_page(99, tmp_db)
     resp = client.post(f"/pin/{page['edit_token']}/save", json={**SAVE_BODY, "sources": []})

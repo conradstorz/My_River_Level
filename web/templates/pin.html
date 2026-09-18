@@ -64,7 +64,6 @@
 (function () {
   const token = {{ edit_token|tojson }};
   const initial = {{ ({"lat": page.pin_lat, "lon": page.pin_lon})|tojson }};
-  const botLink = {{ bot_link|tojson }};
   const map = L.map('map').setView(initial.lat != null ? [initial.lat, initial.lon] : [39.5, -98.35],
                                    initial.lat != null ? 11 : 4);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -99,15 +98,19 @@
     if (!data.candidates.length) {
       list.innerHTML = '<li class="list-group-item text-muted">No gauges found near here. Try another spot.</li>';
     }
+    // Gauge names come from USGS/NWPS, but they are still third-party text:
+    // escape everything before it goes into markup.
+    const esc = s => String(s).replace(/[&<>"']/g, ch => (
+      {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
     for (const c of data.candidates) {
       const li = document.createElement('li');
       li.className = 'list-group-item';
       li.innerHTML = `<label class="d-flex gap-2 align-items-start mb-0">
         <input type="checkbox" class="form-check-input mt-1" checked
-               data-kind="${c.kind}" data-id="${c.id}" data-param="${c.parameter_code || ''}">
-        <span><strong>${c.name}</strong>
-          <span class="text-muted small">${c.kind.toUpperCase()} ${c.id} · ${c.distance_km} km</span>
-          <span class="badge bg-secondary tag">${c.tag}</span></span></label>`;
+               data-kind="${esc(c.kind)}" data-id="${esc(c.id)}" data-param="${esc(c.parameter_code || '')}">
+        <span><strong>${esc(c.name)}</strong>
+          <span class="text-muted small">${esc(c.kind.toUpperCase())} ${esc(c.id)} · ${esc(c.distance_km)} km</span>
+          <span class="badge bg-secondary tag">${esc(c.tag)}</span></span></label>`;
       list.appendChild(li);
     }
     document.getElementById('results').hidden = false;
