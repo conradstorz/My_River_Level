@@ -387,9 +387,26 @@ def test_floods_page_receives_a_severe_high_transition(tmp_db):
     adapter.send.assert_called_once()
 
 
+def test_floods_page_receives_the_all_clear_transition(tmp_db):
+    init_db(tmp_db)
+    page_id, site_id = _page_with_site(tmp_db)
+    _set_page(tmp_db, page_id, sensitivity="floods")
+    adapter = _adapter()
+    q = queue.Queue()
+    q.put({"type": "transition", "data": {
+        "site_id": site_id, "site_number": "12345678", "station_name": "Test",
+        "previous_severity": "SEVERE HIGH", "new_severity": "NORMAL",
+        "current_value": 500.0, "unit": "cfs", "percentile": 40.0,
+        "direction": "FALLING",
+    }})
+    NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
+    adapter.send.assert_called_once()
+
+
 def test_unusual_page_skips_trend_but_all_page_gets_it(tmp_db):
     init_db(tmp_db)
     page_id, site_id = _page_with_site(tmp_db)
+    _set_page(tmp_db, page_id, sensitivity="unusual")
     trend = {"type": "trend", "data": {
         "site_id": site_id, "site_number": "12345678", "station_name": "Test",
         "unit": "ft", "direction": "RISING", "delta": 2.5, "hours": 6.0,
@@ -399,7 +416,7 @@ def test_unusual_page_skips_trend_but_all_page_gets_it(tmp_db):
     q = queue.Queue()
     q.put(trend)
     NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()
-    adapter.send.assert_not_called()          # default dial is 'unusual'
+    adapter.send.assert_not_called()
     _set_page(tmp_db, page_id, sensitivity="all")
     q.put(trend)
     NotificationDispatcher(q, adapters=[adapter], db_path=tmp_db).run_once()

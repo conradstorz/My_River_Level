@@ -22,7 +22,7 @@ def test_user_pages_gains_pin_columns(tmp_db):
     for name in ("owner_chat_id", "pin_lat", "pin_lon", "river_name",
                  "sensitivity", "status"):
         assert name in cols
-    assert "'unusual'" in cols["sensitivity"]
+    assert "'all'" in cols["sensitivity"]
     assert "'active'" in cols["status"]
 
 

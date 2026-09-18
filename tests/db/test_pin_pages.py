@@ -1,8 +1,9 @@
 import pytest
 
 from db.models import (
-    bind_page_to_chat, create_pin_page, get_active_page_subscribers, get_db,
-    get_page_by_edit_token, get_page_for_chat, get_page_gauges, get_page_sites,
+    bind_page_to_chat, create_pin_page, create_user_page,
+    get_active_page_subscribers, get_db, get_page_by_edit_token,
+    get_page_for_chat, get_page_gauges, get_page_sites,
     save_pin, set_page_sensitivity, set_page_status,
 )
 
@@ -128,6 +129,22 @@ def test_save_pin_stays_pending_without_owner(tmp_db):
     page = create_pin_page(None, tmp_db)
     save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
     assert get_page_by_edit_token(page["edit_token"], tmp_db)["status"] == "pending"
+
+
+def test_save_pin_keeps_admin_page_active(tmp_db):
+    public_token, edit_token = create_user_page("Admin River", tmp_db)
+    page = get_page_by_edit_token(edit_token, tmp_db)
+    assert page["status"] == "active"
+    save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
+    assert get_page_by_edit_token(edit_token, tmp_db)["status"] == "active"
+
+
+def test_save_pin_does_not_unpause_a_paused_page(tmp_db):
+    page = create_pin_page(7, tmp_db)
+    save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
+    set_page_status(page["id"], "paused", tmp_db)
+    save_pin(page["id"], 38.30, -85.80, "Ohio River", "unusual", USGS, [], tmp_db)
+    assert get_page_by_edit_token(page["edit_token"], tmp_db)["status"] == "paused"
 
 
 def test_set_sensitivity_and_status_validate(tmp_db):

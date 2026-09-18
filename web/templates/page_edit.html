@@ -127,6 +127,7 @@
           {% endfor %}
           <button class="btn btn-sm btn-primary mt-2">Save</button>
         </form>
+        {% if page.owner_chat_id is not none or page.pin_lat is not none or page.status == 'pending' %}
         {% if page.pin_lat is not none %}
         <p class="text-muted small mt-3 mb-0">
           Pinned on {{ page.river_name or "the map" }} ·
@@ -137,6 +138,7 @@
           <a href="{{ url_for('pin_map', edit_token=edit_token) }}">Pick a spot on the map</a>
           to have gauges proposed automatically.
         </p>
+        {% endif %}
         {% endif %}
       </div>
     </div>

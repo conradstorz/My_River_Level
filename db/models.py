@@ -180,7 +180,10 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS pin_lat DOUBLE PRECISION",
     "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS pin_lon DOUBLE PRECISION",
     "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS river_name TEXT",
-    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS sensitivity TEXT NOT NULL DEFAULT 'unusual' "
+    # Default 'all' so existing admin-created pages keep every alert they
+    # already got before this column existed; create_pin_page overrides this
+    # to 'unusual' explicitly for new pin pages.
+    "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS sensitivity TEXT NOT NULL DEFAULT 'all' "
     "CHECK (sensitivity IN ('floods', 'unusual', 'all'))",
     "ALTER TABLE user_pages ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active' "
     "CHECK (status IN ('pending', 'active', 'paused', 'stopped'))",
@@ -310,8 +313,8 @@ def create_pin_page(owner_chat_id, db_path=None):
     try:
         cur.execute(
             """INSERT INTO user_pages
-               (public_token, edit_token, page_name, owner_chat_id, status)
-               VALUES (%s, %s, %s, %s, 'pending') RETURNING *""",
+               (public_token, edit_token, page_name, owner_chat_id, status, sensitivity)
+               VALUES (%s, %s, %s, %s, 'pending', 'unusual') RETURNING *""",
             (str(uuid.uuid4()), str(uuid.uuid4()), PIN_PAGE_NAME, owner_chat_id)
         )
         row = cur.fetchone()
@@ -400,7 +403,8 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
         cur.execute(
             """UPDATE user_pages
                SET pin_lat=%s, pin_lon=%s, river_name=%s, sensitivity=%s,
-                   status = CASE WHEN owner_chat_id IS NULL THEN 'pending' ELSE 'active' END
+                   status = CASE WHEN status = 'pending' AND owner_chat_id IS NOT NULL
+                                 THEN 'active' ELSE status END
                WHERE id=%s""",
             (lat, lon, river_name, sensitivity, page_id)
         )

@@ -76,6 +76,10 @@ def start_chat(chat_id, display_name, arg, db_path=None):
             river = page["river_name"] or "your river"
             return (f"✓ Connected. You'll get alerts for {river} here. "
                     "Send /settings any time to change gauges or sensitivity.")
+        if page["status"] == "paused":
+            river = page["river_name"] or "your river"
+            return (f"✓ Connected. Alerts are paused for {river}; "
+                    "send /resume to turn them back on.")
         return ("✓ Connected. Finish picking your spot on the map: "
                 f"{_link_or_explain(map_url(page['edit_token'], db_path))}")
     page = get_page_for_chat(chat_id, db_path)
@@ -86,6 +90,11 @@ def start_chat(chat_id, display_name, arg, db_path=None):
     if page["status"] == "pending":
         return ("Welcome! Pick the spot on the river you care about and I'll "
                 f"watch the gauges there:\n{link}")
+    if page["status"] == "paused":
+        return (f"You're already set up for {page['river_name'] or 'your river'}, "
+                f"but alerts are paused. Send /resume to turn them back on.\n"
+                f"Change it here:\n{link}\nOther commands: /settings /sensitivity "
+                "/sources /pause /resume /stop")
     return (f"You're already set up for {page['river_name'] or 'your river'}. "
             f"Change it here:\n{link}\nOther commands: /settings /sensitivity "
             "/sources /pause /resume /stop")
@@ -220,5 +229,10 @@ class PinCommands:
         query = update.callback_query
         await query.answer()
         reply = await asyncio.to_thread(
-            apply_callback, query.message.chat.id, query.data, self.db_path)
-        await query.edit_message_text(reply)
+            apply_callback, update.effective_chat.id, query.data, self.db_path)
+        try:
+            await query.edit_message_text(reply)
+        except Exception:
+            logger.warning("Could not edit callback message; sending a new one instead",
+                           exc_info=True)
+            await context.bot.send_message(chat_id=update.effective_chat.id, text=reply)

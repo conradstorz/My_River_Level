@@ -3,8 +3,9 @@ from unittest.mock import patch
 
 import pytest
 
-from db.models import (create_pin_page, get_db, get_page_by_edit_token,
-                       get_page_gauges, get_page_sites, init_db, set_setting)
+from db.models import (create_pin_page, create_user_page, get_db,
+                       get_page_by_edit_token, get_page_gauges,
+                       get_page_sites, init_db, set_setting)
 from monitor.pin_discovery import Candidate, Discovery
 from web import routes as routes_mod
 
@@ -18,6 +19,7 @@ def client(tmp_db, monkeypatch):
     routes_mod.PIN_CREATE_LIMITER.reset()
     routes_mod.DISCOVER_TOKEN_LIMITER.reset()
     routes_mod.DISCOVER_IP_LIMITER.reset()
+    routes_mod.PIN_SAVE_LIMITER.reset()
     from web.app import create_app
     import queue
     app = create_app(db_path=tmp_db, notification_queue=queue.Queue())
@@ -190,6 +192,89 @@ def test_save_skips_invalid_sources_but_fails_if_none_remain(client, tmp_db):
     assert resp.status_code == 400
 
 
+def test_save_is_rate_limited_per_token(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site), \
+         patch("web.routes.fetch_gauge_metadata", side_effect=_meta):
+        for _ in range(10):
+            resp = client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY)
+            assert resp.status_code == 200, resp.data
+        resp = client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY)
+    assert resp.status_code == 429
+
+
+def test_save_rejects_too_many_sources(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    sources = [{"kind": "usgs", "id": f"{i:08d}", "parameter_code": "00065"}
+               for i in range(31)]
+    resp = client.post(f"/pin/{page['edit_token']}/save",
+                       json={**SAVE_BODY, "sources": sources})
+    assert resp.status_code == 400
+    assert "30" in resp.get_json()["error"]
+
+
+def test_save_skips_invalid_parameter_code(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    body = {**SAVE_BODY,
+            "sources": [{"kind": "usgs", "id": "03294500", "parameter_code": "DROP"}]}
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site) as v:
+        resp = client.post(f"/pin/{page['edit_token']}/save", json=body)
+    assert v.call_count == 0
+    assert resp.status_code == 400
+    assert resp.get_json()["skipped"] == ["usgs:03294500"]
+    assert get_page_sites(page["id"], tmp_db) == []
+
+
+def test_discover_falls_back_on_unparseable_reach_setting(client, tmp_db):
+    page = create_pin_page(None, tmp_db)
+    set_setting("discovery_reach_km", "abc", tmp_db)
+    with patch("web.routes.discover", return_value=DISCOVERY) as d:
+        resp = client.post(f"/pin/{page['edit_token']}/discover",
+                           json={"lat": 38.28, "lon": -85.76})
+    assert resp.status_code == 200
+    assert d.call_args.kwargs["reach_km"] == 50.0
+
+
+def test_pin_create_rate_limit_keys_by_forwarded_ip_when_trusted(tmp_db, monkeypatch):
+    monkeypatch.setenv("ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "testpass")
+    monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("TRUSTED_PROXY_COUNT", "1")
+    init_db(tmp_db)
+    routes_mod.PIN_CREATE_LIMITER.reset()
+    from web.app import create_app
+    import queue
+    app = create_app(db_path=tmp_db, notification_queue=queue.Queue())
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        for _ in range(10):
+            resp = c.get("/pin", headers={"X-Forwarded-For": "1.1.1.1"})
+            assert resp.status_code == 302
+        resp = c.get("/pin", headers={"X-Forwarded-For": "1.1.1.1"})
+        assert resp.status_code == 429
+        resp = c.get("/pin", headers={"X-Forwarded-For": "2.2.2.2"})
+        assert resp.status_code == 302
+
+
+def test_pin_create_rate_limit_ignores_forwarded_ip_without_trust(tmp_db, monkeypatch):
+    monkeypatch.setenv("ADMIN_USERNAME", "admin")
+    monkeypatch.setenv("ADMIN_PASSWORD", "testpass")
+    monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
+    monkeypatch.delenv("TRUSTED_PROXY_COUNT", raising=False)
+    init_db(tmp_db)
+    routes_mod.PIN_CREATE_LIMITER.reset()
+    from web.app import create_app
+    import queue
+    app = create_app(db_path=tmp_db, notification_queue=queue.Queue())
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        for _ in range(10):
+            resp = c.get("/pin", headers={"X-Forwarded-For": "1.1.1.1"})
+            assert resp.status_code == 302
+        resp = c.get("/pin", headers={"X-Forwarded-For": "2.2.2.2"})
+        assert resp.status_code == 429
+
+
 def test_pin_routes_do_not_require_admin_auth(client, tmp_db):
     # The fixture sends no Authorization header; a 401 here would mean the
     # endpoint was left out of PUBLIC_ENDPOINTS.
@@ -216,6 +301,14 @@ def test_edit_page_sensitivity_post_updates_dial(client, tmp_db):
                        data={"sensitivity": "all"}, follow_redirects=True)
     assert resp.status_code == 200
     assert get_page_by_edit_token(page["edit_token"], tmp_db)["sensitivity"] == "all"
+
+
+def test_edit_page_admin_created_hides_move_pin_link(client, tmp_db):
+    public_token, edit_token = create_user_page("Admin River", tmp_db)
+    resp = client.get(f"/edit/{edit_token}")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert f"/pin/{edit_token}" not in body
 
 
 def test_edit_page_sensitivity_rejects_unknown_value(client, tmp_db):

@@ -1,5 +1,6 @@
 from db.models import (create_pin_page, get_page_by_edit_token, get_page_for_chat,
-                       get_page_gauges, get_page_sites, save_pin, set_setting)
+                       get_page_gauges, get_page_sites, save_pin, set_page_status,
+                       set_setting)
 from monitor.adapters.telegram_commands import (
     NO_BASE_URL, NO_PAGE, apply_callback, map_url, sensitivity_keyboard,
     set_status_reply, settings_reply, sources_keyboard, start_chat,
@@ -54,6 +55,25 @@ def test_start_with_token_binds_web_first_page(tmp_db):
     row = get_page_by_edit_token(page["edit_token"], tmp_db)
     assert row["owner_chat_id"] == 42 and row["status"] == "active"
     assert "Ohio River" in reply
+
+
+def test_start_with_token_for_paused_page_mentions_resume(tmp_db):
+    _base(tmp_db)
+    page = create_pin_page(42, tmp_db)
+    save_pin(page["id"], 38.0, -85.0, "Ohio River", "unusual", USGS, [], tmp_db)
+    set_page_status(page["id"], "paused", tmp_db)
+    reply = start_chat(42, "Ann", page["edit_token"], tmp_db)
+    assert "/resume" in reply
+
+
+def test_start_without_arg_for_existing_paused_page_mentions_resume(tmp_db):
+    _base(tmp_db)
+    start_chat(42, "Ann", "", tmp_db)
+    page = get_page_for_chat(42, tmp_db)
+    save_pin(page["id"], 38.0, -85.0, "Ohio River", "unusual", USGS, [], tmp_db)
+    set_page_status(page["id"], "paused", tmp_db)
+    reply = start_chat(42, "Ann", "", tmp_db)
+    assert "/resume" in reply
 
 
 def test_start_with_bad_token_reports_it(tmp_db):

@@ -66,6 +66,12 @@ UNRATED_DETAIL = (
 PIN_CREATE_LIMITER = RateLimiter(limit=10, per_seconds=86400)
 DISCOVER_TOKEN_LIMITER = RateLimiter(limit=20, per_seconds=3600)
 DISCOVER_IP_LIMITER = RateLimiter(limit=60, per_seconds=3600)
+PIN_SAVE_LIMITER = RateLimiter(limit=10, per_seconds=3600)
+
+# A pin page's sources come from a visitor-driven discovery search, not an
+# admin form, so the count needs an upper bound independent of what the map
+# UI happens to send.
+MAX_PIN_SOURCES = 30
 
 SENSITIVITY_LABELS = [
     ("floods", "Floods only",
@@ -101,6 +107,18 @@ def _parse_coordinates(payload):
 
 def _client_ip():
     return request.remote_addr or "unknown"
+
+
+def _float_setting(key, default, db_path):
+    """Read a numeric setting, falling back to `default` if it won't parse.
+
+    Settings are free-text in the DB; a malformed value here must not 500 a
+    public route.
+    """
+    try:
+        return float(get_setting(key, db_path, default=str(default)))
+    except (TypeError, ValueError):
+        return default
 
 
 def gauge_quality_view(lid, db_path=None):
@@ -677,8 +695,8 @@ def register_routes(app):
         coords = _parse_coordinates(request.get_json(silent=True))
         if coords is None:
             return jsonify({"error": "lat and lon must be valid coordinates."}), 400
-        reach_km = float(get_setting("discovery_reach_km", db_path, default="50"))
-        radius = float(get_setting("search_radius_miles", db_path, default="25"))
+        reach_km = _float_setting("discovery_reach_km", 50.0, db_path)
+        radius = _float_setting("search_radius_miles", 25.0, db_path)
         result = discover(coords[0], coords[1], reach_km=reach_km,
                           fallback_radius_miles=radius)
         return jsonify(result.to_dict())
@@ -688,6 +706,8 @@ def register_routes(app):
         """POST /pin/<edit_token>/save — store the pin and provision its sources."""
         db_path = current_app.config["DB_PATH"]
         page = _pin_page_or_abort(edit_token)
+        if not PIN_SAVE_LIMITER.allow(edit_token):
+            return jsonify({"error": "Too many saves; please wait a while."}), 429
         payload = request.get_json(silent=True) or {}
         coords = _parse_coordinates(payload)
         if coords is None:
@@ -698,6 +718,8 @@ def register_routes(app):
         sources = payload.get("sources") or []
         if not isinstance(sources, list) or not sources:
             return jsonify({"error": "Choose at least one source."}), 400
+        if len(sources) > MAX_PIN_SOURCES:
+            return jsonify({"error": "Too many sources; choose at most 30."}), 400
 
         usgs_sites, noaa_gauges, skipped = [], [], []
         for src in sources:
@@ -711,6 +733,9 @@ def register_routes(app):
                 continue
             if kind == "usgs":
                 code = str(src.get("parameter_code") or "00065")
+                if code not in ("00065", "00060"):
+                    skipped.append(f"usgs:{ident}")
+                    continue
                 ok, name, _err = validate_usgs_site(ident, code)
                 if ok:
                     usgs_sites.append({"site_number": ident, "station_name": name,

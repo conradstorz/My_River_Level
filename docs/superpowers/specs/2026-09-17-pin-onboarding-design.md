@@ -143,7 +143,7 @@ All changes are additive migrations in `db/models.py`, applied by the existing
 | `owner_chat_id` | BIGINT NULL | Telegram chat id; NULL = admin-created or unbound web-first page |
 | `pin_lat`, `pin_lon` | DOUBLE PRECISION NULL | |
 | `river_name` | TEXT NULL | From NLDI GNIS name |
-| `sensitivity` | TEXT NOT NULL DEFAULT 'unusual' | CHECK IN ('floods','unusual','all') |
+| `sensitivity` | TEXT NOT NULL DEFAULT 'all' | CHECK IN ('floods','unusual','all'); default 'all' so existing admin pages keep every alert unchanged, `create_pin_page` sets 'unusual' explicitly for new pin pages |
 | `status` | TEXT NOT NULL DEFAULT 'active' | CHECK IN ('pending','active','paused','stopped') |
 
 The existing `active` flag stays as the admin kill switch; alert routing

@@ -155,6 +155,12 @@ Portal credentials are the exception: `ADMIN_USERNAME` and
 database is what the portal protects. With no password set, admin routes
 return 503 rather than falling open.
 
+`TRUSTED_PROXY_COUNT` (env var, default `0`) is also environment-only: when
+set above zero, `web/app.py` wraps the app in Werkzeug's `ProxyFix` so that
+many `X-Forwarded-For` hops from a declared reverse proxy are trusted for the
+client address the pin-flow rate limiters key on. Left at `0`, forwarded
+headers are ignored and every visitor is keyed by the socket peer address.
+
 ### Alert routing
 
 Alerts are routed per user, not broadcast. A landing page links to USGS sites
@@ -172,6 +178,9 @@ after 7 days). Each page has a `sensitivity` dial
 (`floods` / `unusual` / `all`) applied by the dispatcher through
 `monitor.scheduler.alert_allowed`, and a lifecycle `status`
 (`pending` / `active` / `paused` / `stopped`); only `active` pages receive alerts.
+The `sensitivity` column defaults to `'all'` so existing admin-created pages
+keep every alert unchanged; `create_pin_page` explicitly sets `'unusual'` for
+new pin pages.
 
 ### Gauge quality grading
 

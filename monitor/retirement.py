@@ -37,6 +37,7 @@ def sweep(db_path=None):
         cur.execute(
             f"""UPDATE sites s SET active = 0
                WHERE s.origin = 'user' AND s.active = 1
+                 AND s.added_at::timestamptz < NOW() - INTERVAL '10 minutes'
                  AND NOT EXISTS (
                      SELECT 1 FROM page_sites ps
                      JOIN user_pages up ON up.id = ps.page_id

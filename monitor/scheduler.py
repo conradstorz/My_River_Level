@@ -83,19 +83,24 @@ _SEVERITIES_FOR = {
 }
 
 
-def alert_allowed(sensitivity, alert_type, severity):
+def alert_allowed(sensitivity, alert_type, severity, previous_severity=None):
     """Return True if a page at `sensitivity` should receive this alert.
 
     Applied at dispatch time, so two pages watching the same gauge with
     different dials still cost one poll. An unrecognised dial is treated as
-    the default 'unusual' rather than silencing the page.
+    the default 'unusual' rather than silencing the page. For a `transition`,
+    `previous_severity` is also checked so a 'floods' page gets the all-clear
+    when a SEVERE HIGH condition drops back to NORMAL -- the new severity
+    alone would otherwise not qualify.
     """
     level = sensitivity if sensitivity in _SEVERITIES_FOR else "unusual"
     if alert_type == "noaa_transition":
         return True
     if alert_type == "trend":
         return level == "all"
-    if alert_type in ("transition", "reminder"):
+    if alert_type == "transition":
+        return severity in _SEVERITIES_FOR[level] or previous_severity in _SEVERITIES_FOR[level]
+    if alert_type == "reminder":
         return severity in _SEVERITIES_FOR[level]
     return True
 

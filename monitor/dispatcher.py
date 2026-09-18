@@ -203,13 +203,16 @@ class NotificationDispatcher(threading.Thread):
             # this site — the `subscribers` table is for broadcasts alone, so
             # nobody hears about a river they never asked about.
             severity = None
+            previous_severity = None
             if item["type"] == "transition":
                 severity = item["data"]["new_severity"]
+                previous_severity = item["data"].get("previous_severity")
             elif item["type"] == "reminder":
                 severity = item["data"]["severity"]
             subscribers = get_page_subscribers_for_site(site_id, self.db_path)
             for sub in subscribers:
-                if not alert_allowed(sub.get("sensitivity"), item["type"], severity):
+                if not alert_allowed(sub.get("sensitivity"), item["type"], severity,
+                                     previous_severity):
                     continue
                 adapter = self.adapters.get(sub["channel"])
                 if adapter is None:

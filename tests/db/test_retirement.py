@@ -26,14 +26,33 @@ def _exec(tmp_db, sql, params=()):
     conn.close()
 
 
+def _backdate_site(tmp_db, site_number, hours=1):
+    """Age a site's `added_at` so it clears the sweep's 10-minute grace window."""
+    _exec(tmp_db,
+          "UPDATE sites SET added_at=(NOW() - (%s * INTERVAL '1 hour'))::TEXT "
+          "WHERE site_number=%s",
+          (hours, site_number))
+
+
 def test_user_sources_with_no_live_page_are_deactivated(tmp_db):
     page = create_pin_page(1, tmp_db)
     save_pin(page["id"], 38.0, -85.0, "Ohio", "unusual", USGS, NOAA, tmp_db)
     set_page_status(page["id"], "stopped", tmp_db)
+    _backdate_site(tmp_db, "03294500")
     result = sweep(tmp_db)
     assert result["sites"] == 1 and result["gauges"] == 1
     assert _active(tmp_db, "sites", "site_number", "03294500") == 0
     assert _active(tmp_db, "noaa_gauges", "lid", "MLUK2") == 0
+
+
+def test_recently_provisioned_site_is_not_retired_even_if_unreferenced(tmp_db):
+    page = create_pin_page(1, tmp_db)
+    save_pin(page["id"], 38.0, -85.0, "Ohio", "unusual", USGS, [], tmp_db)
+    set_page_status(page["id"], "stopped", tmp_db)
+    _backdate_site(tmp_db, "03294500", hours=1 / 60)   # added ~1 minute ago
+    result = sweep(tmp_db)
+    assert result["sites"] == 0
+    assert _active(tmp_db, "sites", "site_number", "03294500") == 1
 
 
 def test_paused_page_keeps_its_sources(tmp_db):
@@ -105,6 +124,7 @@ def test_pinned_pending_page_is_deleted_after_a_week(tmp_db):
     _exec(tmp_db,
           "UPDATE user_pages SET created_at=(NOW() - INTERVAL '8 days')::TEXT WHERE id=%s",
           (page["id"],))
+    _backdate_site(tmp_db, "03294500")
     first = sweep(tmp_db)
     assert first["pending_pages"] == 1
     second = sweep(tmp_db)                       # page gone → source now unreferenced
