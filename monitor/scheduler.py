@@ -2,9 +2,11 @@
 
 import threading
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from db.models import get_db, get_setting
+from monitor.retirement import sweep
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +104,7 @@ class SchedulerThread(threading.Thread):
     """Daemon thread that re-enqueues reminder alerts for sites still in an alert state."""
 
     CHECK_INTERVAL_SECONDS = 300  # check every 5 minutes
+    SWEEP_INTERVAL_SECONDS = 3600  # retire unreferenced user sources hourly
 
     def __init__(self, notification_queue, db_path=None, stop_event=None):
         """Store the notification queue, optional db_path, and stop event."""
@@ -109,12 +112,14 @@ class SchedulerThread(threading.Thread):
         self.notification_queue = notification_queue
         self.db_path = db_path
         self.stop_event = stop_event or threading.Event()
+        self._last_sweep = 0.0
 
     def run(self):
-        """Check reminders each iteration then wait CHECK_INTERVAL_SECONDS, looping until stop_event is set."""
+        """Check reminders each iteration, sweep hourly, until stop_event is set."""
         logger.info("SchedulerThread started")
         while not self.stop_event.is_set():
             self._check_reminders()
+            self._maybe_sweep()
             self.stop_event.wait(timeout=self.CHECK_INTERVAL_SECONDS)
         logger.info("SchedulerThread stopped")
 
@@ -129,3 +134,14 @@ class SchedulerThread(threading.Thread):
                     })
         except Exception:
             logger.exception("Error checking reminders")
+
+    def _maybe_sweep(self):
+        """Run the retirement sweep if SWEEP_INTERVAL_SECONDS have passed."""
+        now = time.monotonic()
+        if now - self._last_sweep < self.SWEEP_INTERVAL_SECONDS:
+            return
+        self._last_sweep = now
+        try:
+            sweep(self.db_path)
+        except Exception:
+            logger.exception("Retirement sweep failed")
