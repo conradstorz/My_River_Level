@@ -18,9 +18,12 @@ import hmac
 import json
 import logging
 
-from flask import render_template, current_app, request, redirect, url_for, flash
+from flask import (render_template, current_app, request, redirect, url_for,
+                   flash, jsonify, abort)
 from twilio.request_validator import RequestValidator
-from db.models import get_db, get_setting, set_setting, get_sites_with_health
+from db.models import (get_db, get_setting, set_setting, get_sites_with_health,
+                       create_pin_page, get_page_by_edit_token, save_pin,
+                       SENSITIVITY_LEVELS)
 from version import VERSION, RELEASE_DATE
 from monitor.site_validation import validate_usgs_site
 from monitor.site_search import search_sites_by_name
@@ -31,6 +34,8 @@ from monitor.gauge_discovery import combined_site_matches
 from monitor.search_cache import get_or_compute
 from monitor.noaa_search import search_noaa_gauges_by_name
 from monitor.gauge_quality import split_quality_detail
+from monitor.pin_discovery import discover
+from web.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +60,47 @@ UNRATED_DETAIL = (
     "actually did yet. A grade appears once enough NOAA forecasts have been "
     "collected — usually a few days after the gauge is added."
 )
+
+# Public pin routes call third-party APIs on a visitor's click, so they are
+# throttled. Per process, per container: a brake, not a distributed quota.
+PIN_CREATE_LIMITER = RateLimiter(limit=10, per_seconds=86400)
+DISCOVER_TOKEN_LIMITER = RateLimiter(limit=20, per_seconds=3600)
+DISCOVER_IP_LIMITER = RateLimiter(limit=60, per_seconds=3600)
+
+SENSITIVITY_LABELS = [
+    ("floods", "Floods only",
+     "NOAA flood-category changes and severe highs"),
+    ("unusual", "Floods and unusual levels",
+     "Also unusually low or high readings for the time of year"),
+    ("all", "Everything, including rapid changes",
+     "Also fast rises and falls between readings"),
+]
+
+
+def bot_deep_link(edit_token, db_path):
+    """Return the t.me link that binds this page to a Telegram chat, or None."""
+    username = (get_setting("telegram_bot_username", db_path, default="") or "").strip()
+    if not username:
+        return None
+    return f"https://t.me/{username}?start={edit_token}"
+
+
+def _parse_coordinates(payload):
+    """Return (lat, lon) floats from a JSON body, or None if unusable."""
+    if not isinstance(payload, dict):
+        return None
+    try:
+        lat = float(payload.get("lat"))
+        lon = float(payload.get("lon"))
+    except (TypeError, ValueError):
+        return None
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return None
+    return lat, lon
+
+
+def _client_ip():
+    return request.remote_addr or "unknown"
 
 
 def gauge_quality_view(lid, db_path=None):
@@ -143,6 +189,8 @@ SETTINGS_GROUPS = [
                 ("poll_interval_minutes", "Poll Interval (minutes)", "number"),
                 ("historical_start_year", "Historical Start Year", "number"),
                 ("search_radius_miles", "Search Radius (miles)", "number"),
+                ("discovery_reach_km", "Pin discovery reach along the river (km)", "number"),
+                ("public_base_url", "Public base URL (e.g. https://river.example.com)", "text"),
             ]},
         ],
     },
@@ -590,6 +638,118 @@ def register_routes(app):
                                    public_token=public_token,
                                    edit_token=edit_token)
         return render_template("page_new.html")
+
+    @app.route("/pin")
+    def pin_start():
+        """GET /pin — web-first entry: create a pending page and open its map."""
+        if not PIN_CREATE_LIMITER.allow(_client_ip()):
+            return "Too many new pages from this address today.\n", 429
+        db_path = current_app.config["DB_PATH"]
+        page = create_pin_page(None, db_path)
+        return redirect(url_for("pin_map", edit_token=page["edit_token"]))
+
+    def _pin_page_or_abort(edit_token):
+        page = get_page_by_edit_token(edit_token, current_app.config["DB_PATH"])
+        if not page:
+            abort(404)
+        if page["status"] == "stopped":
+            abort(410)
+        return page
+
+    @app.route("/pin/<edit_token>")
+    def pin_map(edit_token):
+        """GET /pin/<edit_token> — the map screen."""
+        db_path = current_app.config["DB_PATH"]
+        page = _pin_page_or_abort(edit_token)
+        return render_template(
+            "pin.html", page=page, edit_token=edit_token,
+            sensitivity_options=SENSITIVITY_LABELS,
+            bot_link=bot_deep_link(edit_token, db_path),
+        )
+
+    @app.route("/pin/<edit_token>/discover", methods=["POST"])
+    def pin_discover(edit_token):
+        """POST /pin/<edit_token>/discover — propose gauges for a lat/lon."""
+        db_path = current_app.config["DB_PATH"]
+        _pin_page_or_abort(edit_token)
+        if not DISCOVER_TOKEN_LIMITER.allow(edit_token) or not DISCOVER_IP_LIMITER.allow(_client_ip()):
+            return jsonify({"error": "Too many searches; please wait a while."}), 429
+        coords = _parse_coordinates(request.get_json(silent=True))
+        if coords is None:
+            return jsonify({"error": "lat and lon must be valid coordinates."}), 400
+        reach_km = float(get_setting("discovery_reach_km", db_path, default="50"))
+        radius = float(get_setting("search_radius_miles", db_path, default="25"))
+        result = discover(coords[0], coords[1], reach_km=reach_km,
+                          fallback_radius_miles=radius)
+        return jsonify(result.to_dict())
+
+    @app.route("/pin/<edit_token>/save", methods=["POST"])
+    def pin_save(edit_token):
+        """POST /pin/<edit_token>/save — store the pin and provision its sources."""
+        db_path = current_app.config["DB_PATH"]
+        page = _pin_page_or_abort(edit_token)
+        payload = request.get_json(silent=True) or {}
+        coords = _parse_coordinates(payload)
+        if coords is None:
+            return jsonify({"error": "lat and lon must be valid coordinates."}), 400
+        sensitivity = payload.get("sensitivity", "unusual")
+        if sensitivity not in SENSITIVITY_LEVELS:
+            return jsonify({"error": "Unknown sensitivity level."}), 400
+        sources = payload.get("sources") or []
+        if not isinstance(sources, list) or not sources:
+            return jsonify({"error": "Choose at least one source."}), 400
+
+        usgs_sites, noaa_gauges, skipped = [], [], []
+        for src in sources:
+            kind = (src or {}).get("kind")
+            ident = str((src or {}).get("id", "")).strip()
+            if not ident:
+                continue
+            if kind == "usgs":
+                code = str(src.get("parameter_code") or "00065")
+                ok, name, _err = validate_usgs_site(ident, code)
+                if ok:
+                    usgs_sites.append({"site_number": ident, "station_name": name,
+                                       "parameter_code": code})
+                else:
+                    skipped.append(f"usgs:{ident}")
+            elif kind == "noaa":
+                meta = fetch_gauge_metadata(ident)
+                if meta:
+                    noaa_gauges.append(meta)
+                else:
+                    skipped.append(f"noaa:{ident}")
+        if not usgs_sites and not noaa_gauges:
+            return jsonify({"error": "None of the chosen sources could be verified.",
+                            "skipped": skipped}), 400
+
+        river_name = (payload.get("river_name") or "").strip() or None
+        save_pin(page["id"], coords[0], coords[1], river_name, sensitivity,
+                 usgs_sites, noaa_gauges, db_path)
+        saved = get_page_by_edit_token(edit_token, db_path)
+
+        queue_ = current_app.config.get("NOTIFICATION_QUEUE")
+        if saved["owner_chat_id"] is not None and queue_ is not None:
+            names = [s["station_name"] or s["site_number"] for s in usgs_sites] + \
+                    [g["station_name"] for g in noaa_gauges]
+            listing = "\n".join(f"• {n}" for n in names)
+            queue_.put({"type": "direct", "data": {
+                "channel": "telegram",
+                "channel_id": str(saved["owner_chat_id"]),
+                "message": (
+                    f"✓ You're set up for {river_name or 'your river'}. "
+                    f"You'll hear about:\n{listing}\n\n"
+                    "Send /settings any time to change gauges or sensitivity."
+                ),
+            }})
+
+        return jsonify({
+            "ok": True,
+            "status": saved["status"],
+            "skipped": skipped,
+            "bot_link": bot_deep_link(edit_token, db_path),
+            "edit_url": url_for("page_edit", edit_token=edit_token),
+        })
 
     @app.route("/view/<public_token>")
     def page_view(public_token):

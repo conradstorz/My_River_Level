@@ -1,0 +1,141 @@
+{# web/templates/pin.html #}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pick your spot on the river</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <style>
+    #map { height: 60vh; min-height: 320px; }
+    .tag { font-size: .75rem; }
+  </style>
+</head>
+<body>
+<div class="container py-3">
+  <h1 class="h3">Pick your spot on the river</h1>
+  <p class="text-muted">Click the map where you care about the water. We'll find the gauges on that stretch and you choose which to keep.</p>
+
+  <div id="map" class="mb-3 rounded border"></div>
+
+  <div class="d-flex gap-2 mb-3">
+    <button id="find" class="btn btn-primary" disabled>Find gauges</button>
+    <span id="status" class="align-self-center text-muted"></span>
+  </div>
+
+  <div id="results" hidden>
+    <h2 class="h5" id="river"></h2>
+    <p id="snapnote" class="text-warning small" hidden>No waterway found right here; showing the nearest gauges instead.</p>
+    <ul id="candidates" class="list-group mb-3"></ul>
+
+    <fieldset class="mb-3">
+      <legend class="h6">How much do you want to hear?</legend>
+      {% for value, label, help in sensitivity_options %}
+      <div class="form-check">
+        <input class="form-check-input" type="radio" name="sensitivity" id="s-{{ value }}"
+               value="{{ value }}" {% if value == page.sensitivity %}checked{% endif %}>
+        <label class="form-check-label" for="s-{{ value }}">
+          <strong>{{ label }}</strong> <span class="text-muted small">— {{ help }}</span>
+        </label>
+      </div>
+      {% endfor %}
+    </fieldset>
+
+    <button id="save" class="btn btn-success">Save</button>
+    <span id="saveerr" class="text-danger ms-2"></span>
+  </div>
+
+  <div id="done" class="alert alert-success mt-3" hidden>
+    <p class="mb-2">Saved.</p>
+    <p id="done-pending" class="mb-2" hidden>
+      To get alerts, connect Telegram:
+      <a id="botlink" class="btn btn-sm btn-primary" target="_blank" rel="noopener">Send alerts to Telegram</a>
+      <span id="nobot" class="text-muted small" hidden>(The Telegram bot is not configured yet — ask the site owner.)</span>
+    </p>
+    <p id="done-active" class="mb-0" hidden>Alerts will arrive in your Telegram chat. Send <code>/settings</code> there any time.</p>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+(function () {
+  const token = {{ edit_token|tojson }};
+  const initial = {{ ({"lat": page.pin_lat, "lon": page.pin_lon})|tojson }};
+  const botLink = {{ bot_link|tojson }};
+  const map = L.map('map').setView(initial.lat != null ? [initial.lat, initial.lon] : [39.5, -98.35],
+                                   initial.lat != null ? 11 : 4);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+  let marker = null, pin = null, riverName = null;
+  function place(latlng) {
+    pin = { lat: +latlng.lat.toFixed(6), lon: +latlng.lng.toFixed(6) };
+    if (marker) marker.setLatLng(latlng); else marker = L.marker(latlng).addTo(map);
+    document.getElementById('find').disabled = false;
+  }
+  if (initial.lat != null) place(L.latLng(initial.lat, initial.lon));
+  else if (navigator.geolocation) navigator.geolocation.getCurrentPosition(
+    p => map.setView([p.coords.latitude, p.coords.longitude], 10), () => {});
+  map.on('click', e => place(e.latlng));
+
+  const status = document.getElementById('status');
+  const list = document.getElementById('candidates');
+  document.getElementById('find').addEventListener('click', async () => {
+    status.textContent = 'Looking along the river…';
+    list.innerHTML = '';
+    document.getElementById('results').hidden = true;
+    const resp = await fetch(`/pin/${token}/discover`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(pin)});
+    const data = await resp.json();
+    if (!resp.ok) { status.textContent = data.error || 'Search failed.'; return; }
+    status.textContent = '';
+    riverName = data.river_name;
+    document.getElementById('river').textContent = data.river_name || 'Nearest gauges';
+    document.getElementById('snapnote').hidden = data.snap === 'on_network';
+    if (!data.candidates.length) {
+      list.innerHTML = '<li class="list-group-item text-muted">No gauges found near here. Try another spot.</li>';
+    }
+    for (const c of data.candidates) {
+      const li = document.createElement('li');
+      li.className = 'list-group-item';
+      li.innerHTML = `<label class="d-flex gap-2 align-items-start mb-0">
+        <input type="checkbox" class="form-check-input mt-1" checked
+               data-kind="${c.kind}" data-id="${c.id}" data-param="${c.parameter_code || ''}">
+        <span><strong>${c.name}</strong>
+          <span class="text-muted small">${c.kind.toUpperCase()} ${c.id} · ${c.distance_km} km</span>
+          <span class="badge bg-secondary tag">${c.tag}</span></span></label>`;
+      list.appendChild(li);
+    }
+    document.getElementById('results').hidden = false;
+  });
+
+  document.getElementById('save').addEventListener('click', async () => {
+    const err = document.getElementById('saveerr');
+    err.textContent = '';
+    const sources = [...list.querySelectorAll('input:checked')].map(i => ({
+      kind: i.dataset.kind, id: i.dataset.id,
+      ...(i.dataset.param ? {parameter_code: i.dataset.param} : {})}));
+    const sensitivity = document.querySelector('input[name=sensitivity]:checked').value;
+    const resp = await fetch(`/pin/${token}/save`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...pin, river_name: riverName, sensitivity, sources})});
+    const data = await resp.json();
+    if (!resp.ok) { err.textContent = data.error || 'Could not save.'; return; }
+    document.getElementById('results').hidden = true;
+    document.getElementById('done').hidden = false;
+    if (data.status === 'active') {
+      document.getElementById('done-active').hidden = false;
+    } else {
+      document.getElementById('done-pending').hidden = false;
+      if (data.bot_link) document.getElementById('botlink').href = data.bot_link;
+      else { document.getElementById('botlink').hidden = true; document.getElementById('nobot').hidden = false; }
+    }
+  });
+})();
+</script>
+</body>
+</html>
