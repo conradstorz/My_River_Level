@@ -782,7 +782,7 @@ def register_routes(app):
         sites = get_page_sites(page["id"], db_path)
         return render_template("page_edit.html", page=page, gauges=gauges,
                                subscribers=subscribers, sites=sites,
-                               edit_token=edit_token)
+                               edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS)
 
     @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
     def page_add_gauge(edit_token):
@@ -861,7 +861,7 @@ def register_routes(app):
             "page_edit.html", page=page, gauges=gauges, subscribers=subscribers,
             sites=sites, edit_token=edit_token, gauge_matches=gauge_matches,
             gauge_query=query, gauge_page=pageno, gauge_pages=pages,
-            gauge_total=total)
+            gauge_total=total, sensitivity_options=SENSITIVITY_LABELS)
 
     @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
     def page_remove_gauge(edit_token):
@@ -993,6 +993,22 @@ def register_routes(app):
         if channel and channel_id:
             set_page_subscriber_status(page["id"], channel, channel_id, new_status, db_path)
             flash(f"Status updated to {new_status}.", "success")
+        return redirect(url_for("page_edit", edit_token=edit_token))
+
+    @app.route("/edit/<edit_token>/sensitivity", methods=["POST"])
+    def page_set_sensitivity(edit_token):
+        """POST /edit/<edit_token>/sensitivity — set how much this page hears about."""
+        from db.models import set_page_sensitivity
+        db_path = current_app.config["DB_PATH"]
+        page = get_page_by_edit_token(edit_token, db_path)
+        if not page:
+            abort(404)
+        value = request.form.get("sensitivity", "")
+        if value not in SENSITIVITY_LEVELS:
+            flash("Unknown sensitivity level.", "danger")
+        else:
+            set_page_sensitivity(page["id"], value, db_path)
+            flash("Sensitivity updated.", "success")
         return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/admin/pages")

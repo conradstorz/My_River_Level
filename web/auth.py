@@ -50,6 +50,7 @@ PUBLIC_ENDPOINTS = frozenset({
     "page_remove_site",
     "page_subscribe",
     "page_unsubscribe",
+    "page_set_sensitivity",
     "pin_start",
     "pin_map",
     "pin_discover",

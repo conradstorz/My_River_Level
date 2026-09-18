@@ -196,3 +196,30 @@ def test_pin_routes_do_not_require_admin_auth(client, tmp_db):
     page = create_pin_page(None, tmp_db)
     assert client.get(f"/pin/{page['edit_token']}").status_code == 200
     assert client.get("/pin").status_code == 302
+
+
+ADMIN_AUTH = "Basic " + __import__("base64").b64encode(b"admin:testpass").decode()
+
+
+def test_edit_page_shows_sensitivity_and_move_pin_link(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    resp = client.get(f"/edit/{page['edit_token']}")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert 'name="sensitivity"' in body
+    assert f"/pin/{page['edit_token']}" in body
+
+
+def test_edit_page_sensitivity_post_updates_dial(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    resp = client.post(f"/edit/{page['edit_token']}/sensitivity",
+                       data={"sensitivity": "all"}, follow_redirects=True)
+    assert resp.status_code == 200
+    assert get_page_by_edit_token(page["edit_token"], tmp_db)["sensitivity"] == "all"
+
+
+def test_edit_page_sensitivity_rejects_unknown_value(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    client.post(f"/edit/{page['edit_token']}/sensitivity", data={"sensitivity": "loud"})
+    assert get_page_by_edit_token(page["edit_token"], tmp_db)["sensitivity"] == "unusual"
+    assert client.post("/edit/nope/sensitivity", data={"sensitivity": "all"}).status_code == 404
