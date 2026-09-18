@@ -215,8 +215,8 @@ def test_dispatcher_sends_reminder_to_page_subscribers_of_that_site(tmp_db):
 def test_dispatcher_sends_trend_alert_and_logs_it(tmp_db):
     init_db(tmp_db)
     page_id, site_id = _page_with_site(tmp_db, channel_id="trend-sub")
-    # Trend alerts require the 'all' sensitivity dial; the default is
-    # 'unusual', which this test is not exercising.
+    # Trend alerts require the 'all' sensitivity dial; set it explicitly so
+    # the test does not depend on the column default.
     _set_page(tmp_db, page_id, sensitivity="all")
 
     mock_adapter = MagicMock()
