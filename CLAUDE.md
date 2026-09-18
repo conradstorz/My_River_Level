@@ -166,7 +166,9 @@ broadcasts.
 Pin pages (`user_pages.owner_chat_id` set) are created from Telegram `/start`
 or from `GET /pin`. Saving the pin provisions the chosen USGS sites and NOAA
 gauges with `origin='user'`; `monitor/retirement.py` deactivates them once no
-active or paused page references them. Each page has a `sensitivity` dial
+live page references them (a page is live when `active`, `paused`, or still
+`pending` with a pin saved; pinned pages never bound to Telegram are deleted
+after 7 days). Each page has a `sensitivity` dial
 (`floods` / `unusual` / `all`) applied by the dispatcher through
 `monitor.scheduler.alert_allowed`, and a lifecycle `status`
 (`pending` / `active` / `paused` / `stopped`); only `active` pages receive alerts.
@@ -201,7 +203,10 @@ no substring name search).
 Pin discovery uses the USGS Network Linked Data Index
 (`https://api.water.usgs.gov/nldi/linked-data`): `comid/position` snaps a point
 to a flowline; `comid/{comid}/navigation/UM|DM/nwissite` lists gauges along the
-main stem.
+main stem. NLDI publishes no river name, so `pin_discovery.py` derives it from
+the station names on the stem. NOAA gauges are paired with USGS sites through
+the NWPS per-gauge endpoint (`/gauges/{usgs_number}` resolves to a LID); the
+NWPS bounding-box listing carries no `usgsId`.
 
 ### NOAA API
 
