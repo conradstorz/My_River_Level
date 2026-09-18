@@ -71,6 +71,33 @@ def get_current_site_severities(db_path=None):
     return [dict(r) for r in rows]
 
 
+#: Which USGS severities each sensitivity level wants to hear about. Trend
+#: (rise/fall rate) alerts are gated separately because they carry no
+#: severity. NOAA flood-category changes reach every level.
+_SEVERITIES_FOR = {
+    "floods": {"SEVERE HIGH"},
+    "unusual": {"SEVERE HIGH", "HIGH", "LOW", "SEVERE LOW", "NORMAL"},
+    "all": {"SEVERE HIGH", "HIGH", "LOW", "SEVERE LOW", "NORMAL"},
+}
+
+
+def alert_allowed(sensitivity, alert_type, severity):
+    """Return True if a page at `sensitivity` should receive this alert.
+
+    Applied at dispatch time, so two pages watching the same gauge with
+    different dials still cost one poll. An unrecognised dial is treated as
+    the default 'unusual' rather than silencing the page.
+    """
+    level = sensitivity if sensitivity in _SEVERITIES_FOR else "unusual"
+    if alert_type == "noaa_transition":
+        return True
+    if alert_type == "trend":
+        return level == "all"
+    if alert_type in ("transition", "reminder"):
+        return severity in _SEVERITIES_FOR[level]
+    return True
+
+
 class SchedulerThread(threading.Thread):
     """Daemon thread that re-enqueues reminder alerts for sites still in an alert state."""
 

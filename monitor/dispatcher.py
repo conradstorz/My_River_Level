@@ -5,6 +5,7 @@ import logging
 
 from db.models import (get_db, get_page_subscribers_for_gauge,
                        get_page_subscribers_for_site)
+from monitor.scheduler import alert_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,19 @@ class NotificationDispatcher(threading.Thread):
                                         trigger_type, False, str(e), db_path=self.db_path)
                 return
 
+            if item["type"] == "direct":
+                data = item["data"]
+                adapter = self.adapters.get(data["channel"])
+                if adapter is None:
+                    logger.warning("No adapter for direct message on %s", data["channel"])
+                    return
+                try:
+                    adapter.send(data["channel_id"], data["message"])
+                except Exception:
+                    logger.exception("Failed direct message to %s/%s",
+                                     data["channel"], data["channel_id"])
+                return
+
             if item["type"] == "transition":
                 message = format_transition_message(item["data"])
                 trigger_type = "transition"
@@ -167,6 +181,8 @@ class NotificationDispatcher(threading.Thread):
                 gauge_id = item["data"]["gauge_id"]
                 subscribers = get_page_subscribers_for_gauge(gauge_id, self.db_path)
                 for sub in subscribers:
+                    if not alert_allowed(sub.get("sensitivity"), "noaa_transition", None):
+                        continue
                     adapter = self.adapters.get(sub["channel"])
                     if adapter is None:
                         continue
@@ -186,8 +202,15 @@ class NotificationDispatcher(threading.Thread):
             # Site alerts go only to the subscribers of pages that reference
             # this site — the `subscribers` table is for broadcasts alone, so
             # nobody hears about a river they never asked about.
+            severity = None
+            if item["type"] == "transition":
+                severity = item["data"]["new_severity"]
+            elif item["type"] == "reminder":
+                severity = item["data"]["severity"]
             subscribers = get_page_subscribers_for_site(site_id, self.db_path)
             for sub in subscribers:
+                if not alert_allowed(sub.get("sensitivity"), item["type"], severity):
+                    continue
                 adapter = self.adapters.get(sub["channel"])
                 if adapter is None:
                     continue
