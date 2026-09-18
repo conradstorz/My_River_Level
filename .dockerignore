@@ -15,7 +15,10 @@ logs/
 .git/
 .gitignore
 
-# Development
+# Development. tests/ is deliberately NOT listed: the CLI machine builds with
+# the classic builder (no buildx), which ignores Dockerfile.test.dockerignore,
+# so the test image can only see tests/ if the shared context includes it.
+# The production Dockerfile removes tests/ from the image instead.
 docs/
 .worktrees/
 
