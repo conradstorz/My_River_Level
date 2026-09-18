@@ -26,3 +26,24 @@ def test_reset_clears_everything():
     rl.allow("a", now=0)
     rl.reset()
     assert rl.allow("a", now=1) is True
+
+
+def test_idle_keys_are_pruned_once_the_table_is_large():
+    rl = RateLimiter(limit=1, per_seconds=10)
+    rl.PRUNE_AT = 5
+    for i in range(5):
+        rl.allow(f"k{i}", now=0)
+    assert rl.tracked_keys() == 5
+    rl.allow("fresh", now=20)                 # every k* hit expired at t=10
+    assert rl.tracked_keys() == 1
+
+
+def test_prune_keeps_keys_with_live_hits():
+    rl = RateLimiter(limit=1, per_seconds=10)
+    rl.PRUNE_AT = 2
+    rl.allow("old", now=0)
+    rl.allow("live", now=15)
+    rl.allow("new", now=16)                   # triggers a prune at cutoff=6
+    assert rl.tracked_keys() == 2
+    assert rl.allow("live", now=17) is False  # its hit at t=15 survived
+
