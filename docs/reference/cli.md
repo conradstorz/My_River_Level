@@ -41,7 +41,7 @@ Commands an operator runs, all from the project directory.
 | command | purpose | notes |
 |---|---|---|
 | `docker compose exec app python -c "from db.models import get_setting; print(get_setting('poll_interval_minutes'))"` | Read one setting's current value. | Substitute any key from [`settings.md`](settings.md) for `poll_interval_minutes`. |
-| `PGPASSWORD=<db-password> pg_dump -h <db-host> -U river -d rivermonitor -F p -f rivermonitor.sql` | Dump the production database to a plain-SQL file. | Used by [`../howto/backup-restore.md`](../howto/backup-restore.md); substitute `river_test` for the test database. |
-| `PGPASSWORD=<db-password> psql -h <db-host> -U river -d rivermonitor -f rivermonitor.sql` | Restore a plain-SQL dump into the database. | Restoring assumes the schema already exists (`init_db` runs automatically on the app's next start), and does not itself create the database. |
+| `docker exec <postgres-container> pg_dump -U river -Fc rivermonitor > rivermonitor-$(date +%F).dump` | Dump the production database (custom format) through the shared-postgres container. | The server publishes no host port and the daemon is remote, so `pg_dump` runs inside its container; `<postgres-container>` is the name shown by `docker ps` in the shared-postgres project. Full procedure: [`../howto/backup-restore.md`](../howto/backup-restore.md). Substitute `river_test` for the test database. |
+| `docker exec -i <postgres-container> pg_restore -U river -d rivermonitor --clean --if-exists < rivermonitor-<date>.dump` | Restore a custom-format dump into the database. | Assumes the database exists; `init_db` re-applies the schema on the app's next start. |
 
 Verified against commit c12d91c

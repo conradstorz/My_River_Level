@@ -66,14 +66,24 @@ Monitor to trust.
    buckets. (Confirm the separation directly by repeating step 5's header 10
    more times — request 11 gets `429`, while step 6's address is unaffected.)
 
-7. Point channel webhooks at the new hostname and set the base URL the portal
-   uses for its own links, on the Settings page:
-   - `public_base_url` = `https://<portal-host>`
-   - Twilio's webhook URL = `https://<portal-host>/webhook/twilio`
-   - Facebook's webhook URL = `https://<portal-host>/webhook/facebook`
+7. On the portal, open **Settings → Monitoring** and set `public_base_url`
+   to `https://<portal-host>`, then save.
 
-   Expected: Telegram deep links, the pin map, and provider webhook
-   deliveries all use `https://<portal-host>` afterward.
+   Expected: the Telegram `/start` reply and the pin map now link to
+   `https://<portal-host>/...`.
+
+8. In the Twilio console (not this portal), set the messaging webhook to
+   `https://<portal-host>/webhook/twilio` and the status callback to
+   `https://<portal-host>/webhook/twilio/status`.
+
+   Expected: an inbound test message reaches the portal log as a signed
+   request (see [Twilio and Facebook](twilio-and-facebook.md)).
+
+9. In the Facebook app dashboard (not this portal), set the Messenger
+   webhook to `https://<portal-host>/webhook/facebook` and complete the
+   verify-token challenge.
+
+   Expected: the dashboard reports the webhook as verified.
 
 ## Health checks from the proxy
 
