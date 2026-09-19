@@ -81,8 +81,8 @@ Every command below runs on the Windows CLI machine unless noted.
 > people you trust with root.
 
 For a web UI with per-user, per-container access control instead of shell
-access, [`../docker-ssh-access.md`](../docker-ssh-access.md) has a Portainer
-install (its Part 6) that coexists with this context.
+access, install [Portainer](https://www.portainer.io/) on `<docker-host>` —
+it coexists with this context and needs no SSH key of its own.
 
 ## Shared PostgreSQL
 
