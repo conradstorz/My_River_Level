@@ -60,10 +60,11 @@ see.
 
 ## River name
 
-NLDI's `comid/position` snap and its `comid/{comid}` lookup both return no
-GNIS river name — also verified live on 2026-09-17 — so the name shown on
-the confirm screen is derived instead from the names of the stem gauges
-themselves, preferring NOAA names over USGS ones since NWPS's are cleaner.
+NLDI's `comid/position` snap returns no GNIS river name — the maintainer
+also checked the separate `comid/{comid}` lookup and confirmed it carries no
+name either, live on 2026-09-17 — so the name shown on the confirm screen is
+derived instead from the names of the stem gauges themselves, preferring
+NOAA names over USGS ones since NWPS's are cleaner.
 The derivation looks for a location marker — words like " AT ", " NR ", " US
 OF ", or a comma — that separates a river name from the place description
 that follows it, and takes everything before that marker as the name. A

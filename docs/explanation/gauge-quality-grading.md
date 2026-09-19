@@ -30,17 +30,19 @@ way and reported alongside it, but does not affect the grade itself.
 The rubric is checked in order, first match wins. No flood-stage thresholds
 at all is graded F ("Not usable for flood warning") — regardless of forecast
 quality, the gauge cannot say when flooding starts. A gauge with thresholds
-but no confirmed forecast is D ("Observation only"). No observation in the
-last 24 hours is F ("Not reporting"), even if forecasts exist, because a
-forecast nobody can check against reality is not worth grading. Fewer than
-ten matched pairs is not a letter at all but "Unrated" ("Collecting accuracy
-data") — not enough evidence yet either way. Only once ten or more pairs
-exist does the 24-hour mean absolute error decide the letter: under 0.5 ft
-is A ("Reliable flood predictions"), under 1.0 ft is B ("Good"), under 2.0 ft
-is C ("Fair"), and 2.0 ft or worse is D ("Unreliable"). The headline in
-parentheses and a longer sentence citing the actual error figures are stored
-together in one text column, joined by a separator, and split back apart
-for display.
+whose forecast NOAA has confirmed absent is D ("Observation only"). A gauge
+whose forecast status is still unknown — never successfully checked — is
+Unrated ("Not yet assessed") instead, since NOAA has not actually said there
+is no forecast. No observation in the last 24 hours is F ("Not reporting"),
+even if forecasts exist, because a forecast nobody can check against reality
+is not worth grading. Fewer than ten matched pairs is a second, later
+"Unrated" state, "Collecting accuracy data" — not enough evidence yet either
+way. Only once ten or more pairs exist does the 24-hour mean absolute error
+decide the letter: under 0.5 ft is A ("Reliable flood predictions"), under
+1.0 ft is B ("Good"), under 2.0 ft is C ("Fair"), and 2.0 ft or worse is D
+("Unreliable"). The headline in parentheses and a longer sentence citing the
+actual error figures are stored together in one text column, joined by a
+separator, and split back apart for display.
 
 `has_forecast` on `noaa_gauges` is a deliberate three-way flag rather than a
 boolean: true once NOAA has confirmed a forecast exists, false once NOAA has
@@ -52,8 +54,13 @@ would tell a subscriber "this gauge gives no advance warning" when the truth
 is only "we could not ask NOAA this time" — a much stronger and more
 damaging claim than the situation warrants.
 
-"Unrated" paired with "Not yet assessed" is the ordinary state for a gauge
-that was just added, not a fault to be fixed: the forecast archive starts
-empty and takes days to accumulate the ten matched pairs a letter grade
-needs, and a portal page showing a freshly added gauge is expected to show
-that headline until enough forecasts have come and gone to check against.
+"Unrated" covers two different states, not one, and neither is a fault to be
+fixed. "Not yet assessed" fires while the gauge's forecast status is still
+unknown — just added, or the last check failed — and can clear on the very
+next grading pass, as soon as NOAA confirms a forecast present or absent.
+"Collecting accuracy data" fires afterward, once a forecast is confirmed and
+being archived but fewer than ten matched forecast/observation pairs have
+accumulated; that one does take days, since the archive starts empty and
+each pair needs both a forecast issued and an observation to check it
+against. A portal page showing a freshly added gauge should expect to pass
+through the first state before it can even reach the second.

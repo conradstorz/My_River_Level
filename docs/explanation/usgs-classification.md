@@ -50,9 +50,13 @@ minutes and enqueues a `reminder` item when one is due. The interval depends
 on the severity: `reminder_severe_hours` for SEVERE LOW/SEVERE HIGH,
 `reminder_low_high_hours` for LOW/HIGH, and never for NORMAL. "Due" means no
 `reminder`-type row exists yet for that site in `notifications`, or the most
-recent one is older than the interval — so a condition that flips back to
-NORMAL and returns to, say, HIGH starts the reminder clock over rather than
-resuming a stale one.
+recent one is older than the interval — and `is_reminder_due` looks up that
+most recent row with no severity filter, so the clock is per site, not per
+episode. A condition that flips back to NORMAL and returns to, say, HIGH does
+not start the clock over: its first reminder in the new episode is still due
+relative to the old episode's last reminder, so it can arrive sooner than a
+full interval away, or immediately if that old reminder is already older
+than the interval.
 
 ## Rise and fall alerts
 

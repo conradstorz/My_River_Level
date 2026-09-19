@@ -24,7 +24,7 @@ There are three dials, each a strict superset of the one below it:
 | NOAA flood-category change | yes | yes | yes |
 | USGS SEVERE HIGH transition, either direction (including the all-clear back to NORMAL) | yes | yes | yes |
 | USGS SEVERE HIGH reminder | yes | yes | yes |
-| USGS HIGH / LOW / SEVERE LOW transition or reminder | — | yes | yes |
+| USGS HIGH / LOW / SEVERE LOW transition or reminder, and the return to NORMAL | — | yes | yes |
 | Rise/fall (trend) alert | — | — | yes |
 
 A `floods` page hears about NOAA changes unconditionally, and on the USGS
@@ -32,7 +32,11 @@ side only ever hears SEVERE HIGH — including its own all-clear, since a
 transition is admitted when either its new severity or its previous severity
 qualifies, so the drop back to NORMAL still reaches a page that heard the
 SEVERE HIGH begin. `unusual` adds every other USGS band, HIGH/LOW/SEVERE LOW
-and their reminders and transitions. `all` adds nothing on the USGS side
+and their reminders and transitions. Its all-clear works differently than
+`floods`'s, though: `unusual`'s severity set includes NORMAL outright, so a
+HIGH/LOW/SEVERE LOW page on that dial is admitted by the new severity alone,
+where `floods` has no NORMAL in its set and reaches its all-clear only
+through the `previous_severity` fallback. `all` adds nothing on the USGS side
 beyond `unusual` except trend alerts, which are gated so strictly that only
 `all` ever sees them. An unrecognised sensitivity value is treated as
 `unusual` rather than silencing the page outright.
