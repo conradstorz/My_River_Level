@@ -11,6 +11,6 @@ Variables read from the container environment (compose passes them from `.env`);
 | `FLASK_SECRET_KEY` | Yes (`docker-compose.yml` fails loudly with `:?` if unset) | `river-monitor-dev-secret` | `web/app.py` (`create_app`) | Flask session signing key. |
 | `TEST_DATABASE_URL` | Required by the Docker test overlay (`:?`); optional for a host `pytest` run | `postgresql://river:river@localhost:5432/river_test` | `tests/conftest.py` | Used only by the test suite, never by the running service. |
 | `TEST_DB_SUFFIX` | No (compose only) | `` (empty) | `docker-compose.test.yml` | Appended to `TEST_DATABASE_URL` by the test overlay, so parallel test runs can target distinct databases, e.g. `TEST_DB_SUFFIX=_x`. |
-| `TRUSTED_PROXY_COUNT` | No | `0` | `web/app.py` (`create_app`) | Number of reverse proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` to trust; `0` disables `ProxyFix` entirely — see [`../howto/reverse-proxy.md`](../howto/reverse-proxy.md). `docker-compose.yml` does not currently forward this variable into the container either. |
+| `TRUSTED_PROXY_COUNT` | No | `0` | `web/app.py` (`create_app`) | Number of reverse proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` to trust; `0` disables `ProxyFix` entirely — see [`../howto/reverse-proxy.md`](../howto/reverse-proxy.md). `docker-compose.yml` forwards it from `.env` (default `0`). |
 
 Verified against commit c12d91c
