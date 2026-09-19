@@ -7,8 +7,11 @@
 services:
   app:
     build: .
-    ports:
-      - "5743:5743"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.river.rule: Host(`river.hpz440.ohr3023.org`)
+      traefik.http.services.river.loadbalancer.server.port: "5743"
+      harbor.description: "River level"
     environment:
       # Secrets come from .env (gitignored); :? fails loudly if unset.
       # Safe to interpolate: none of these values contain a `$`.
@@ -43,12 +46,15 @@ services:
       retries: 3
     networks:
       - shared-db
+      - harbor
 
 # Owned by the shared-postgres project; we join it as an external network.
 networks:
   shared-db:
     external: true
     name: shared-db
+  harbor:
+    external: true
 
 volumes:
   app_logs:
