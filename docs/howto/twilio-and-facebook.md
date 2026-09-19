@@ -77,12 +77,10 @@ a specific gauge, subscribe that same phone number on the page's editor
    verification), then save.
    Expected: "Settings saved."
 
-4. Set the app's **App Secret** as the `facebook_app_secret` setting. This
-   one has no portal form field — set it from the CLI:
-   ```bash
-   docker compose exec app python -c "from db.models import set_setting; set_setting('facebook_app_secret', '<app-secret>')"
-   ```
-   Expected: no output. Every inbound Facebook webhook is HMAC-verified
+4. On the same Settings page, paste the app's **App Secret** into
+   **Facebook App Secret** and save.
+
+   Expected: "Settings saved." Every inbound Facebook webhook is HMAC-verified
    against this value; leaving it unset makes every POST return 403.
 
 5. In the Facebook App dashboard, set the webhook URL to this project's
