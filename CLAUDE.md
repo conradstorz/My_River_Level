@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+Operator documentation lives in `docs/README.md`; keep it in sync when settings, routes, tables or commands change (run `python scripts/check_docs.py`).
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Database

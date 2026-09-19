@@ -72,3 +72,11 @@ def test_saving_one_group_leaves_other_groups_untouched(client, tmp_db):
     }, follow_redirects=True)
     assert get_setting("poll_interval_minutes", tmp_db) == "42"  # untouched
     assert get_setting("telegram_bot_token", tmp_db) == "tok"
+
+
+def test_channels_page_offers_the_facebook_app_secret(client):
+    # Without this field the Facebook webhook can never be enabled from the
+    # portal: verify_facebook_signature rejects every POST while it is unset.
+    resp = client.get("/settings/channels")
+    assert b'name="facebook_app_secret"' in resp.data
+
