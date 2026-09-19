@@ -33,7 +33,7 @@ Credentials are stored as plain settings values, not environment variables; the 
 | `facebook_page_token` | secret | `` (empty) | — | Facebook Page access token used to send outbound Messenger replies. | `FacebookAdapter` |
 | `facebook_verify_token` | secret | `` (empty) | — | Shared secret Facebook must echo back as `hub.verify_token` during webhook subscription verification. | `web: /webhook/facebook` |
 | `telegram_bot_token` | secret | `` (empty) | — | Telegram Bot API token; the bot supervisor waits for this to be set, and restarts the bot within `TelegramAdapter.TOKEN_POLL_SECONDS` (30 s) of it changing. | `TelegramAdapter` |
-| `telegram_bot_username` | text | `` (empty) | — | The bot's own `@username`, written automatically once the bot connects; used to build the `/start` deep link (`https://t.me/<bot-username>?start=<edit_token>`). | `TelegramAdapter` |
+| `telegram_bot_username` | text | `` (empty) | — | The bot's own `@username`, written automatically once the bot connects; used to build the `/start` deep link (`https://t.me/<bot-username>?start=<edit_token>`). Written by `TelegramAdapter` at bot start. | `web: /pin/*` |
 | `twilio_account_sid` | secret | `` (empty) | — | Twilio Account SID used to authenticate outbound SMS/WhatsApp sends. | `SMSAdapter`, `WhatsAppAdapter` |
 | `twilio_auth_token` | secret | `` (empty) | — | Twilio Auth Token; also verifies `X-Twilio-Signature` on inbound Twilio webhooks. | `SMSAdapter`, `WhatsAppAdapter`, `web: /webhook/twilio` |
 | `twilio_sms_number` | secret | `` (empty) | — | The Twilio phone number outbound SMS is sent from. | `SMSAdapter` |
