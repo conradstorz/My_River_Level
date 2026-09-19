@@ -263,3 +263,77 @@ def test_twilio_status_webhook_accepts_valid_signature(monkeypatch, tmp_db):
         "http://localhost/webhook/twilio/status", params)
     resp = c.post("/webhook/twilio/status", data=params, headers={"X-Twilio-Signature": sig})
     assert resp.status_code == 204
+
+
+def _hash_client(monkeypatch, tmp_db, password_hash):
+    monkeypatch.setenv("ADMIN_USERNAME", "admin")
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", password_hash)
+    init_db(tmp_db)
+    app = create_app(db_path=tmp_db)
+    app.config["TESTING"] = True
+    return app.test_client()
+
+
+def test_hash_format_error_accepts_a_real_hash():
+    from werkzeug.security import generate_password_hash
+    from web.auth import hash_format_error
+    assert hash_format_error(generate_password_hash("secret")) is None
+
+
+def test_hash_format_error_rejects_stripped_separators():
+    """The PowerShell/compose failure: every `$` eaten, hash still 'looks' fine."""
+    from werkzeug.security import generate_password_hash
+    from web.auth import hash_format_error
+    mangled = generate_password_hash("secret").replace(chr(36), "")
+    assert hash_format_error(mangled) is not None
+
+
+def test_hash_format_error_rejects_empty_salt():
+    from web.auth import hash_format_error
+    assert hash_format_error("scrypt:32768:8:1" + chr(36) + chr(36) + "ab") is not None
+
+
+def test_mangled_hash_returns_503_not_401(monkeypatch, tmp_db):
+    """A broken hash must be reported as misconfiguration, not a bad password.
+
+    check_password_hash returns False for a separator-less string, so without
+    this the operator sees an endless 401 loop and hunts for a typo.
+    """
+    from werkzeug.security import generate_password_hash
+    mangled = generate_password_hash("secret").replace(chr(36), "")
+    c = _hash_client(monkeypatch, tmp_db, mangled)
+    resp = c.get("/", headers=_auth())
+    assert resp.status_code == 503
+    assert b"ADMIN_PASSWORD_HASH" in resp.data
+
+
+def test_mangled_hash_blocks_even_without_credentials(monkeypatch, tmp_db):
+    from werkzeug.security import generate_password_hash
+    mangled = generate_password_hash("secret").replace(chr(36), "")
+    c = _hash_client(monkeypatch, tmp_db, mangled)
+    assert c.get("/").status_code == 503
+
+
+def test_mangled_hash_does_not_block_public_routes(monkeypatch, tmp_db):
+    from werkzeug.security import generate_password_hash
+    mangled = generate_password_hash("secret").replace(chr(36), "")
+    c = _hash_client(monkeypatch, tmp_db, mangled)
+    assert c.get("/healthz").status_code == 200
+
+
+def test_check_admin_config_reports_mangled_hash(monkeypatch):
+    from werkzeug.security import generate_password_hash
+    from web.auth import check_admin_config
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH",
+                       generate_password_hash("secret").replace(chr(36), ""))
+    assert check_admin_config() is not None
+
+
+def test_check_admin_config_silent_when_hash_is_valid(monkeypatch):
+    from werkzeug.security import generate_password_hash
+    from web.auth import check_admin_config
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    monkeypatch.setenv("ADMIN_PASSWORD_HASH", generate_password_hash("secret"))
+    assert check_admin_config() is None

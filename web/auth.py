@@ -16,7 +16,8 @@ Environment variables:
     Plaintext fallback, hashed on first use.
 
 If neither password variable is set the guard **fails closed**: protected
-routes return 503 rather than falling open to anonymous access.
+routes return 503 rather than falling open to anonymous access. A hash that is
+set but malformed also returns 503 — see :func:`hash_format_error`.
 
 Endpoints listed in :data:`PUBLIC_ENDPOINTS` are exempt. These are either
 unauthenticated by design (the container healthcheck, the provider webhooks,
@@ -64,16 +65,49 @@ UNCONFIGURED_MESSAGE = (
 
 _REALM = 'Basic realm="River Monitor"'
 
+# Written as a chr() so that no source file, shell command, or compose
+# variable in this project ever has to quote a bare `$` — see the module
+# docstring of set_admin_password.py for why that matters.
+_SEP = chr(36)
+
 # Hashing is deliberately slow, so remember the hash we derived for a given
 # plaintext password instead of re-deriving it on every request.
 _derived_hashes = {}
+
+
+def hash_format_error(password_hash):
+    """Return why ``password_hash`` is unusable, or None if it looks valid.
+
+    werkzeug encodes a hash as ``method$salt$hash``. Those separators are
+    exactly the character that docker compose interpolation eats (``$name``)
+    and that PowerShell expands (``$$`` is its "last token of the previous
+    command" variable), so a hash arriving with them stripped is by far the
+    likeliest misconfiguration here.
+
+    It is also the most confusing one: ``check_password_hash`` returns False
+    for a separator-less string rather than raising, so a mangled hash is
+    indistinguishable from a wrong password and produces an endless 401 loop.
+    Detecting it lets the guard say what is actually wrong.
+    """
+    parts = password_hash.split(_SEP)
+    if len(parts) != 3 or not all(parts):
+        return (
+            "ADMIN_PASSWORD_HASH is not a valid werkzeug hash: expected "
+            "'method{sep}salt{sep}hash' but found {n} '{sep}' separator(s). "
+            "If there are none, they were stripped in transit: every '{sep}' "
+            "in .env must be written twice, and PowerShell eats a doubled "
+            "one. Regenerate with: "
+            "uv run --with werkzeug python set_admin_password.py"
+        ).format(sep=_SEP, n=len(parts) - 1)
+    return None
 
 
 def admin_credentials():
     """Return ``(username, password_hash)`` from the environment, or None.
 
     None means no password is configured at all, which callers must treat as
-    "refuse every request" — never as "allow every request".
+    "refuse every request" — never as "allow every request". The hash is
+    returned unvalidated; call :func:`hash_format_error` on it.
     """
     username = os.environ.get("ADMIN_USERNAME", "admin").strip() or "admin"
     password_hash = os.environ.get("ADMIN_PASSWORD_HASH", "").strip()
@@ -98,8 +132,31 @@ def _unauthorized():
     )
 
 
+def _misconfigured(message):
+    """Build the 503 that reports a config problem instead of a login failure."""
+    return Response(message + "\n", status=503)
+
+
+def check_admin_config():
+    """Log any problem with the configured admin credentials; return the reason.
+
+    Called at startup so a broken hash is visible in the logs immediately,
+    rather than only as repeated 401s once someone tries to log in.
+    """
+    credentials = admin_credentials()
+    if credentials is None:
+        logger.error("%s Admin routes will return 503.", UNCONFIGURED_MESSAGE)
+        return UNCONFIGURED_MESSAGE
+    reason = hash_format_error(credentials[1])
+    if reason:
+        logger.error("%s Admin routes will return 503.", reason)
+    return reason
+
+
 def init_auth(app):
     """Install the before_request guard that protects every non-public route."""
+
+    check_admin_config()
 
     @app.before_request
     def _require_admin():
@@ -112,8 +169,14 @@ def init_auth(app):
             logger.error(
                 "Refusing %s %s: no admin password configured", request.method, request.path
             )
-            return Response(UNCONFIGURED_MESSAGE, status=503)
+            return _misconfigured(UNCONFIGURED_MESSAGE)
         username, password_hash = credentials
+        reason = hash_format_error(password_hash)
+        if reason:
+            # 503, not 401: the operator's password may well be correct, and
+            # sending 401 here would send them hunting for a typo instead.
+            logger.error("Refusing %s %s: %s", request.method, request.path, reason)
+            return _misconfigured(reason)
         auth = request.authorization
         if auth is None or auth.type != "basic" or not auth.password:
             return _unauthorized()
