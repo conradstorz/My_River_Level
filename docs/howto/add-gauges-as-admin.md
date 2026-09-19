@@ -69,7 +69,7 @@
     Expected: **User Pages**, listing every page with its gauge, site, and
     active-subscriber counts.
 
-11. Toggle a page's visibility with the **Active** button in that list.
+11. Switch a page off or on with its **Disable** / **Enable** button in that list (the *Active* / *Disabled* badge beside it only shows the current state).
     Expected: an inactive page's `/view/<public_token>` starts returning 404
     to visitors; its subscribers stop hearing from it, but the page itself
     and its gauges are untouched.

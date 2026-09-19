@@ -71,6 +71,16 @@ def test_rebind_does_not_unpause_a_paused_page(tmp_db):
     assert bound["status"] == "paused"
 
 
+def test_binding_a_new_page_stops_the_chats_previous_page(tmp_db):
+    first = create_pin_page(42, tmp_db)
+    save_pin(first["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
+    second = create_pin_page(None, tmp_db)          # web-first, unbound
+    bound = bind_page_to_chat(second["edit_token"], 42, "Ann", tmp_db)
+    assert bound["owner_chat_id"] == 42
+    assert get_page_by_edit_token(first["edit_token"], tmp_db)["status"] == "stopped"
+    assert get_page_for_chat(42, tmp_db)["id"] == second["id"]
+
+
 def test_bind_refuses_unknown_token_and_foreign_page(tmp_db):
     assert bind_page_to_chat("nope", 42, "Ann", tmp_db) is None
     page = create_pin_page(1, tmp_db)

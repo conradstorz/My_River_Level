@@ -22,9 +22,9 @@
    docker compose logs --tail 30 app
    ```
    Expected: `TelegramAdapter started polling` within about 30 seconds
-   (`TelegramAdapter.TOKEN_POLL_SECONDS`) of saving the token. There is no
-   portal field showing the bot's username — confirm it was recorded instead
-   with:
+   (`TelegramAdapter.TOKEN_POLL_SECONDS`) of saving the token.
+
+5. Confirm the bot's username was recorded (there is no portal field for it):
    ```bash
    docker compose exec app python -c "from db.models import get_setting; print(get_setting('telegram_bot_username'))"
    ```
@@ -32,7 +32,7 @@
    result with `Could not read the bot's username` in the logs means the
    token was accepted by the supervisor but the `getMe` call failed.
 
-5. Set the address subscribers reach the portal at, on **Settings →
+6. Set the address subscribers reach the portal at, on **Settings →
    Monitoring**.
    ```
    http://<portal-host>:5743/settings/monitoring
@@ -43,16 +43,16 @@
    and `/start` deep link is built from — see
    [`../reference/settings.md`](../reference/settings.md).
 
-6. Send `/start` to the bot from Telegram.
+7. Send `/start` to the bot from Telegram.
    Expected: a welcome reply ending in a map link, e.g. `Welcome! Pick the
    spot on the river you care about and I'll watch the gauges
    there:\nhttps://<portal-host>/pin/<edit_token>`.
 
-7. Open that link, drop a pin on the map, and save it.
+8. Open that link, drop a pin on the map, and save it.
    Expected: the map's confirm screen lists the proposed USGS/NOAA gauges;
    saving closes it.
 
-8. Check the chat for the save confirmation.
+9. Check the chat for the save confirmation.
    Expected: a message of the form `✓ You're set up for <river>. You'll hear
    about:\n• <gauge name>\n...\n\nSend /settings any time to change gauges or
    sensitivity.` — see [`../reference/alerts.md`](../reference/alerts.md) for

@@ -6,7 +6,7 @@ Work top to bottom in each table — the earlier rows are more common than the l
 
 | likely cause | check | fix |
 |---|---|---|
-| Page's `active` flag is off, or its `status` isn't `active` (`pending`/`paused`/`stopped`) | Admin → Pages (`/admin/pages`) — Active toggle and the page's lifecycle status | [`../explanation/alert-routing-and-sensitivity.md`](../explanation/alert-routing-and-sensitivity.md) |
+| Page's `active` flag is off, or its `status` isn't `active` (`pending`/`paused`/`stopped`) | Admin → Pages (`/admin/pages`) — the Disable/Enable button and the page's lifecycle status | [`../explanation/alert-routing-and-sensitivity.md`](../explanation/alert-routing-and-sensitivity.md) |
 | Subscriber isn't active — globally unsubscribed, or `unsubscribed`/`paused` on this page | Subscribers page (`/subscribers`) for global; the page editor's Active Subscribers list for page-scoped | [`add-gauges-as-admin.md`](add-gauges-as-admin.md) |
 | Page's sensitivity dial is too low for this alert's kind (e.g. a `floods`-only page won't hear a plain HIGH transition) | Page editor's Alert sensitivity card, or send `/sensitivity` in Telegram | [`../explanation/alert-routing-and-sensitivity.md`](../explanation/alert-routing-and-sensitivity.md) |
 | Telegram bot token missing (only affects Telegram recipients) | `docker compose logs app` — look for `Telegram bot token not configured` | [`telegram-bot.md`](telegram-bot.md) |
@@ -63,7 +63,7 @@ Work top to bottom in each table — the earlier rows are more common than the l
 |---|---|---|
 | The web-first page has a pin saved but no chat has tapped its deep link yet | Admin → Pages (`/admin/pages`) — `status` is `pending` and the page already has gauges | [`telegram-bot.md`](telegram-bot.md) |
 | `telegram_bot_username` is empty, so the map's bot link has nothing to point to | Settings → Notification Channels — the bot only records its username once it connects; confirm with the CLI one-liner in [`telegram-bot.md`](telegram-bot.md) | [`telegram-bot.md`](telegram-bot.md) |
-| The chat already owns another live page — `/start <edit_token>` can't bind a second one | Send `/mypages` in Telegram | [`../reference/telegram-commands.md`](../reference/telegram-commands.md) |
+| The chat bound a newer page — binding a second page stops the earlier one, so the earlier page's status is `stopped`, not stuck | Send `/mypages` in Telegram | [`../reference/telegram-commands.md`](../reference/telegram-commands.md) |
 | The page aged out of the retirement sweep (24 h with no pin, or 7 days pinned but never bound) and no longer exists | Admin → Pages (`/admin/pages`) — no longer listed | [`../explanation/source-retirement.md`](../explanation/source-retirement.md) |
 
 ## Alerts stopped after pause or stop
