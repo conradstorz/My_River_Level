@@ -70,4 +70,4 @@ Neither Basic auth, a URL token, nor a provider signature.
 | GET, POST | `/pages/new` | open | View the page-creation form (GET), or create a public landing page (POST). | — |
 | GET | `/pin` | open | Web-first entry: create a pending page and open its map. | 10 per IP per day |
 
-Verified against commit c12d91c
+Verified against commit 20c729b

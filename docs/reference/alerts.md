@@ -65,4 +65,4 @@ Send /settings any time to change gauges or sensitivity.
 | NOAA (`noaa_gauges.severity`) | Unknown / Normal / Action / Minor / Moderate / Major |
 | USGS (`site_conditions.severity`) | SEVERE LOW / LOW / NORMAL / HIGH / SEVERE HIGH / UNKNOWN |
 
-Verified against commit c12d91c
+Verified against commit 20c729b

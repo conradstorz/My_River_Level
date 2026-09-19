@@ -16,4 +16,4 @@ The supervisor (`main.py: supervise`) checks every 60 s (`SUPERVISOR_INTERVAL_SE
 
 Compose's `restart: unless-stopped` policy does **not** itself act on an `unhealthy` healthcheck status — it only restarts the container when the process inside it exits, which is exactly what the supervisor does on a critical thread's death. A dead non-critical thread (`TelegramAdapter`) never makes the process exit, so `/healthz` stays at 503 indefinitely with no automatic recovery; an operator has to notice and run `docker compose restart app` themselves.
 
-Verified against commit c12d91c
+Verified against commit 20c729b

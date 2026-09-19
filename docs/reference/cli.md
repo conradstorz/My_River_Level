@@ -45,4 +45,4 @@ Commands an operator runs, all from the project directory.
 | `docker compose exec app python -c "from db.models import set_setting; set_setting('<key>', '<value>')"` | Change a settings-table value that has no portal field (the `rate_change_*` keys, `site_stale_hours`, `forecast_poll_hours`). | The reading thread picks it up on its next cycle; see [`settings.md`](settings.md) for the full key list. |
 | `docker compose exec app python -c "from db.models import get_db; c=get_db(); cur=c.cursor(); cur.execute('select id, page_name, owner_chat_id, status, edit_token from user_pages order by id'); [print(dict(r)) for r in cur.fetchall()]"` | List every page with its edit token, to open a user's editor on their behalf or answer who owns what. | See [`../howto/add-gauges-as-admin.md`](../howto/add-gauges-as-admin.md) for closing or inspecting a page. |
 
-Verified against commit c12d91c
+Verified against commit 20c729b

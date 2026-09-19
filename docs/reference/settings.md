@@ -59,4 +59,4 @@ Also database-only, with no portal Settings form field — edit them with the `s
 | `forecast_poll_hours` | number | `6` | hours | How often `ForecastPollingThread` archives each NOAA gauge's published forecast and re-grades flood-prediction accuracy. | `ForecastPollingThread` |
 | `site_stale_hours` | number | `6` | hours | A site with no successful USGS fetch within this many hours is flagged stale on the Sites page. | `web: /sites` |
 
-Verified against commit c12d91c
+Verified against commit 20c729b

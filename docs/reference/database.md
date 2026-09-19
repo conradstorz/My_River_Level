@@ -166,4 +166,4 @@ Row is recorded on every `/start` so the portal can see who has met the bot, and
 - `idx_notifications_site_trigger` on `notifications (site_id, trigger_type, id DESC)`
 - `idx_user_pages_owner_chat` on `user_pages (owner_chat_id)`
 
-Verified against commit c12d91c
+Verified against commit 20c729b
