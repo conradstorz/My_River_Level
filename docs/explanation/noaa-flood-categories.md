@@ -30,8 +30,10 @@ against what the river actually did, which is the whole subject of
 notification, by contrast, is enqueued only when the new category differs
 from the gauge's previously stored severity; a gauge that stays Action for
 days keeps writing observations every poll without saying anything new to
-subscribers (its persistence is instead covered by the reminder mechanism
-documented for USGS sites — NOAA gauges have no equivalent reminder).
+subscribers. NOAA gauges get no reminders: after a category-change alert
+fires, there is no repeat notification until the category changes again —
+unlike USGS sites, which do have a reminder mechanism (see
+[`../reference/threads.md`](../reference/threads.md), `SchedulerThread`).
 
 A NOAA gauge is polled once per cycle regardless of how many landing pages
 link to it: `NoaaPollingThread` iterates the distinct rows in `noaa_gauges`,

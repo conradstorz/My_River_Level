@@ -88,7 +88,8 @@ seconds; Twilio and Facebook changes take effect on the next request.
 
 - `.env`
 - any `*.dump` backup file — it contains the whole `rivermonitor` database,
-  channel-token-free but including subscriber contact details
+  including channel tokens (Telegram, Twilio, Facebook) and subscriber
+  contact details; see [`backup-restore.md`](backup-restore.md)
 - the output of `set_admin_password.py` — it is written straight into `.env`,
   never printed anywhere worth copying into a chat or ticket
 

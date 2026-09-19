@@ -4,9 +4,13 @@ Everything River Monitor needs to keep running lives in the `rivermonitor`
 database — see [`../reference/database.md`](../reference/database.md) for
 every table. A `pg_dump` of it captures sites, settings, subscribers, landing
 pages, and history. It does **not** capture the application logs (rotating
-files inside the `app_logs` volume) or `.env` (channel credentials that live
-there rather than in a `settings` row, plus the database URLs and secret key
-themselves) — back those up separately if you need them.
+files inside the `app_logs` volume) or `.env` (`DATABASE_URL`,
+`TEST_DATABASE_URL`, `FLASK_SECRET_KEY`, `ADMIN_USERNAME`,
+`ADMIN_PASSWORD_HASH`, `TRUSTED_PROXY_COUNT`) — back those up separately if
+you need them. Channel credentials (Telegram token, Twilio, Facebook) are
+`settings` rows, not `.env` values, so the dump *does* capture them — treat
+dump files as secret for that reason, not just for the subscriber contact
+details they also hold.
 
 1. Find the shared-postgres project's container name.
    ```bash

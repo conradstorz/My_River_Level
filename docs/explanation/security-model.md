@@ -54,7 +54,7 @@ reverse proxy is the proxy itself; only a correctly set proxy hop count makes
 at scale (see [`reverse-proxy.md`](../howto/reverse-proxy.md)).
 
 A NOAA or USGS station name is third-party text that ends up rendered back
-to visitors — on `page_view.html` and `page_edit.html` it goes through
+to visitors — on `web/templates/page_view.html` and `web/templates/page_edit.html` it goes through
 ordinary Jinja `{{ }}` interpolation, which HTML-escapes it automatically;
 on the pin map, where candidate names arrive over `fetch` as JSON rather
 than through a server-rendered template, the page's own script escapes each

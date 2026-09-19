@@ -14,4 +14,6 @@ Worker threads `main.py` starts, in start order, and what `/healthz` does about 
 
 The supervisor (`main.py: supervise`) checks every 60 s (`SUPERVISOR_INTERVAL_SECONDS`) and, if a thread named in `CRITICAL_THREADS` has died, logs it and exits the process non-zero so Docker's `restart: unless-stopped` policy brings the container back; a dead non-critical thread (`TelegramAdapter`) is only logged. `GET /healthz` reports each thread in the registry's `is_alive()` state independently and returns 503 if any of them — critical or not — is dead, so a container that still serves pages but has a stopped worker is flagged unhealthy even before the supervisor would act.
 
+Compose's `restart: unless-stopped` policy does **not** itself act on an `unhealthy` healthcheck status — it only restarts the container when the process inside it exits, which is exactly what the supervisor does on a critical thread's death. A dead non-critical thread (`TelegramAdapter`) never makes the process exit, so `/healthz` stays at 503 indefinitely with no automatic recovery; an operator has to notice and run `docker compose restart app` themselves.
+
 Verified against commit c12d91c

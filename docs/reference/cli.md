@@ -17,8 +17,7 @@ Commands an operator runs, all from the project directory.
 
 | command | purpose | notes |
 |---|---|---|
-| `docker compose pull` | Pull the published image for the configured tag. | The image is expected to already exist at the registry; building and pushing it happens outside this project's CLI. |
-| `docker compose up -d` | Recreate the app container from the pulled image. | Paired with `pull`, this is the upgrade path — no `--build`, since the image was built elsewhere. |
+| `docker compose up -d --build` | Rebuild the image from the checked-out source and recreate the container (deploy and upgrade). | `docker-compose.yml` builds from local source (`build: .`, no `image:`) — there is no registry image to pull. Full procedure: [`../howto/upgrade.md`](../howto/upgrade.md). |
 
 ## Tests
 
@@ -43,5 +42,7 @@ Commands an operator runs, all from the project directory.
 | `docker compose exec app python -c "from db.models import get_setting; print(get_setting('poll_interval_minutes'))"` | Read one setting's current value. | Substitute any key from [`settings.md`](settings.md) for `poll_interval_minutes`. |
 | `docker exec <postgres-container> pg_dump -U river -Fc rivermonitor > rivermonitor-$(date +%F).dump` | Dump the production database (custom format) through the shared-postgres container. | The server publishes no host port and the daemon is remote, so `pg_dump` runs inside its container; `<postgres-container>` is the name shown by `docker ps` in the shared-postgres project. Full procedure: [`../howto/backup-restore.md`](../howto/backup-restore.md). Substitute `river_test` for the test database. |
 | `docker exec -i <postgres-container> pg_restore -U river -d rivermonitor --clean --if-exists < rivermonitor-<date>.dump` | Restore a custom-format dump into the database. | Assumes the database exists; `init_db` re-applies the schema on the app's next start. |
+| `docker compose exec app python -c "from db.models import set_setting; set_setting('<key>', '<value>')"` | Change a settings-table value that has no portal field (the `rate_change_*` keys, `site_stale_hours`, `forecast_poll_hours`). | The reading thread picks it up on its next cycle; see [`settings.md`](settings.md) for the full key list. |
+| `docker compose exec app python -c "from db.models import get_db; c=get_db(); cur=c.cursor(); cur.execute('select id, page_name, owner_chat_id, status, edit_token from user_pages order by id'); [print(dict(r)) for r in cur.fetchall()]"` | List every page with its edit token, to open a user's editor on their behalf or answer who owns what. | See [`../howto/add-gauges-as-admin.md`](../howto/add-gauges-as-admin.md) for closing or inspecting a page. |
 
 Verified against commit c12d91c

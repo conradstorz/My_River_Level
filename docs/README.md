@@ -7,9 +7,8 @@ day, and how each piece works underneath.
 
 ## Start here
 
-- [First run](tutorials/first-run.md) — clone the repository, provision a
-  database, deploy the container, and walk through your first alert end to
-  end.
+New here? Begin with the tutorial below, then the runbook for your
+deployment.
 
 ## Tutorials
 

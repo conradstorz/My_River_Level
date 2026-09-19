@@ -22,6 +22,14 @@ Work top to bottom in each table — the earlier rows are more common than the l
 | A USGS API outage or transient network failure | `docker compose logs app` around the last poll — look for a traceback under `Error evaluating site` | [`../reference/threads.md`](../reference/threads.md) |
 | `last_error` / `last_error_at` on the site itself | Sites page (`/sites`) — the badge tooltip is exactly this column's value | [`../reference/database.md`](../reference/database.md) |
 
+## NOAA gauge stuck at Unknown or Not yet assessed
+
+| likely cause | check | fix |
+|---|---|---|
+| NWPS outage, or the gauge has no observed current stage | `docker compose logs app` — look for `NOAA stage fetch failed` (from `monitor/noaa_client.py`) or `NOAA gauge <lid> returned no current stage` (from `monitor/noaa_polling.py`) | Wait for the next poll; verify the LID is correct on water.noaa.gov |
+| Flood-category thresholds are missing on this gauge | Open the gauge on the page editor and check which of action/minor/moderate/major stages are filled in | Pick a gauge that publishes flood categories, or accept that it can never classify above its highest available threshold — see [`../explanation/noaa-flood-categories.md`](../explanation/noaa-flood-categories.md) |
+| Forecast has never been successfully fetched (`has_forecast` is `NULL`) | Grade badge on the page editor reads "Not yet assessed" | Wait up to `forecast_poll_hours` for `ForecastPollingThread` to check again; see [`../explanation/gauge-quality-grading.md`](../explanation/gauge-quality-grading.md) |
+
 ## Telegram bot is silent
 
 | likely cause | check | fix |
@@ -35,7 +43,7 @@ Work top to bottom in each table — the earlier rows are more common than the l
 
 | likely cause | check | fix |
 |---|---|---|
-| Neither `ADMIN_PASSWORD_HASH` nor `ADMIN_PASSWORD` is set | `docker compose logs app` — `Admin credentials are not configured. Set ADMIN_PASSWORD_HASH or ADMIN_PASSWORD. Admin routes will return 503.` | [`secrets.md`](secrets.md) |
+| Neither `ADMIN_PASSWORD_HASH` nor `ADMIN_PASSWORD` is set | `docker compose logs app` — `Refusing <METHOD> <path>: no admin password configured`; the 503 response body explains it further | [`secrets.md`](secrets.md) |
 | `ADMIN_PASSWORD_HASH` is set but malformed | `docker compose logs app` — `ADMIN_PASSWORD_HASH is not a valid werkzeug hash: expected 'method$salt$hash' but found N '$' separator(s)...` | [`#admin-password-hash-rejected`](#admin-password-hash-rejected) |
 | A worker thread died, so `/healthz` itself reports unhealthy (this is not the Basic-auth guard) | `curl http://<portal-host>:5743/healthz`, or the CLI one-liner in [`../reference/cli.md`](../reference/cli.md) | [`#container-unhealthy-or-restarting`](#container-unhealthy-or-restarting) |
 
@@ -47,6 +55,7 @@ Work top to bottom in each table — the earlier rows are more common than the l
 | Database unreachable — wrong `DATABASE_URL`, or the `shared-db` network / shared-postgres server isn't up | `docker compose logs app` — `psycopg2.OperationalError`; then, in the shared-postgres project, `docker compose ps` | [`../reference/environment.md`](../reference/environment.md) |
 | `app_logs` volume is still root-owned from a pre-hardening deployment | `docker compose logs app` — a `PermissionError` writing `logs/river_monitor.log` | [`upgrade.md`](upgrade.md) |
 | Healthcheck's 30 s start period hasn't elapsed yet | `docker compose ps` — wait and re-check | [`this-deployment.md`](this-deployment.md) |
+| A dead non-critical thread (`TelegramAdapter`) leaves `/healthz` at 503 forever — Compose's `restart: unless-stopped` does **not** act on an unhealthy healthcheck by itself, only on the process exiting, and a non-critical thread's death never makes the process exit | `docker compose ps` shows `unhealthy` but the container keeps running, not restarting | `docker compose restart app` — see [`../reference/threads.md`](../reference/threads.md) |
 
 ## Pin finds no gauges
 

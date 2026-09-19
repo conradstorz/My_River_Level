@@ -25,7 +25,7 @@ Every key in the `settings` table, seeded with these defaults by `init_db` and e
 
 ## Notification Channels
 
-Credentials are stored as plain settings values, not environment variables; the field type below is `secret` where the portal renders a password input.
+Credentials are stored as plain settings values, not environment variables; `secret` marks a credential, but the portal shows some of these as plain text inputs (the Twilio SID/numbers and the Facebook verify token are `"text"` fields in `SETTINGS_GROUPS`, `web/routes.py`), not all as password inputs.
 
 | key | type | default | unit | effect | read by |
 |---|---|---|---|---|---|
@@ -41,7 +41,7 @@ Credentials are stored as plain settings values, not environment variables; the 
 
 ## Rate of change
 
-Not grouped on the portal Settings page — `SETTINGS_GROUPS` in `web/routes.py` has no form fields for these four keys, so they are database-only: edit them with the one-liner in [`cli.md`](cli.md) or directly with `psql`.
+Not grouped on the portal Settings page — `SETTINGS_GROUPS` in `web/routes.py` has no form fields for these four keys, so they are database-only: edit them with the `set_setting` one-liner in [`cli.md`](cli.md) or directly with `psql`.
 
 | key | type | default | unit | effect | read by |
 |---|---|---|---|---|---|
@@ -52,7 +52,7 @@ Not grouped on the portal Settings page — `SETTINGS_GROUPS` in `web/routes.py`
 
 ## Data health
 
-Also database-only, with no portal Settings form field.
+Also database-only, with no portal Settings form field — edit them with the `set_setting` one-liner in [`cli.md`](cli.md).
 
 | key | type | default | unit | effect | read by |
 |---|---|---|---|---|---|

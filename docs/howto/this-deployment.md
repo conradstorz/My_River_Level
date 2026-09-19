@@ -178,6 +178,27 @@ every connection will authenticate-fail.
   commands makes a remote-daemon failure harder to isolate — run each one
   separately, in order.
 
+## Data growth and logs
+
+Logs rotate on their own: `main.py` configures a `RotatingFileHandler` at
+5 MB with 3 backups, all inside the `app_logs` volume, so log growth is
+bounded without any operator action.
+
+The database is not. `site_conditions`, `noaa_observations`,
+`gauge_forecasts`, and `notifications` each grow one row per poll (or per
+delivery attempt) forever — there is no built-in retention or pruning. Back
+up before deleting anything — see [`backup-restore.md`](backup-restore.md) —
+then prune, for example, `site_conditions` rows older than a year:
+
+```bash
+docker exec <postgres-container> psql -U river -d rivermonitor -c "DELETE FROM site_conditions WHERE checked_at::timestamptz < NOW() - INTERVAL '1 year'"
+```
+
+Expected: `DELETE <n>` printed, naming how many rows were removed. The other
+three tables can be pruned the same way, substituting the table name and its
+own timestamp column (`observed_at` for `noaa_observations`, `issued_at` for
+`gauge_forecasts`, `sent_at` for `notifications`).
+
 ## If it went wrong
 
 - Container never reports healthy — [`diagnose.md#container-unhealthy-or-restarting`](diagnose.md#container-unhealthy-or-restarting)

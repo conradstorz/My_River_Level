@@ -87,6 +87,28 @@ An admin page also has no owning Telegram chat and no lifecycle beyond its
 be closed with `/stop` the way a pin page can; the **Active** toggle here is
 the only way to take one down.
 
+## Closing or inspecting a user's pin page
+
+1. Find the page and its `edit_token` with the listing one-liner in
+   [`../reference/cli.md`](../reference/cli.md) (Database section).
+   Expected: one printed row per page, each a dict with `id`, `page_name`,
+   `owner_chat_id`, `status`, and `edit_token`.
+
+2. Open `/edit/<edit_token>` in a browser using that token.
+   Expected: the same editor the page's owner sees — its NOAA/USGS sources,
+   Active Subscribers list, and sensitivity dial.
+
+3. To close the page rather than just silence it, set its status to
+   `stopped`:
+   ```bash
+   docker compose exec app python -c "from db.models import set_page_status; set_page_status(<id>, 'stopped')"
+   ```
+   Expected: no output. The Admin → Pages **Disable** button only flips
+   `active` off — it silences alerts but leaves the page's sources attached;
+   setting `status` to `stopped` also releases its `user`-origin sources back
+   to the retirement sweep (see
+   [`../explanation/source-retirement.md`](../explanation/source-retirement.md)).
+
 ## If it went wrong
 
 - No alerts arrive — [`diagnose.md#no-alerts-arrive`](diagnose.md#no-alerts-arrive)
