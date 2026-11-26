@@ -85,6 +85,33 @@ Monitor to trust.
 
    Expected: the dashboard reports the webhook as verified.
 
+## This deployment: Traefik plus a Cloudflare tunnel
+
+The maintainer's deployment (see [This deployment](this-deployment.md#public-edge))
+does not use the nginx block above. It has two front doors, each exactly one
+proxy hop in front of the app:
+
+- **Tailnet — Traefik at `<portal-host>`.** The labels on the `app` service
+  in `docker-compose.yml` route the whole app, portal and webhooks included,
+  over the `harbor` network. Unchanged by the public edge.
+- **Internet — Cloudflare tunnel at `https://river.ohr3023.org`.** `cloudflared`
+  (the separate `cloudflare-tunnel` project) reaches the app directly at
+  `http://river-app:5743` over the `public-edge` network, bypassing Traefik.
+  Its dashboard ingress admits only `/pin`, `/pin/...`, `/view/...`,
+  `/edit/...`, `/pages/new`, `/static/...` and `/healthz`, and returns 404
+  for everything else, so the portal and the channel webhooks are never
+  published.
+
+Because each path has one hop, set `TRUSTED_PROXY_COUNT=1` (step 3). Point
+`public_base_url` (step 7) at `https://river.ohr3023.org`, so the links in
+Telegram replies and the pin map open on the public edge. Steps 8 and 9 do
+not apply as written: the webhooks are tailnet-only, so Twilio and Facebook
+cannot reach them through the public hostname.
+
+Check the edge from the CLI machine with
+`python scripts/smoke_public_edge.py --view-token <public_token>` — see
+[`../reference/cli.md`](../reference/cli.md#run).
+
 ## Health checks from the proxy
 
 Point the proxy's own health check at `GET /healthz` — it needs no

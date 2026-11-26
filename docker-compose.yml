@@ -45,8 +45,15 @@ services:
       start_period: 30s
       retries: 3
     networks:
-      - shared-db
-      - harbor
+      shared-db: {}
+      harbor: {}
+      # The Cloudflare tunnel (separate cloudflare-tunnel project) reaches the
+      # app here as http://river-app:5743, bypassing Traefik. Its dashboard
+      # ingress admits only the public pages; the portal and webhooks stay
+      # tailnet-only behind Traefik on the harbor network.
+      public-edge:
+        aliases:
+          - river-app
 
 # Owned by the shared-postgres project; we join it as an external network.
 networks:
@@ -55,6 +62,11 @@ networks:
     name: shared-db
   harbor:
     external: true
+  # Created once by hand on the Docker host (docker network create public-edge);
+  # shared with the cloudflare-tunnel project.
+  public-edge:
+    external: true
+    name: public-edge
 
 volumes:
   app_logs:

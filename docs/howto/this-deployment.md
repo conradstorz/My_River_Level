@@ -7,22 +7,32 @@
 ## Topology
 
 A Windows CLI machine drives everything over SSH — there is no `docker` daemon
-on the CLI machine itself. The remote host runs two independent Compose
-projects joined by one Docker network: `shared-postgres`'s PostgreSQL server
-(reachable at the hostname `postgres`, never a published port) and this
-project's `app` container, which publishes `5743` for the portal.
+on the CLI machine itself. The remote host runs independent Compose projects
+joined by external Docker networks: `shared-postgres`'s PostgreSQL server
+(reachable at the hostname `postgres`, never a published port), Traefik on the
+`harbor` network (serving the whole app, portal included, at `<portal-host>`
+on the tailnet only), the `cloudflare-tunnel` project's `cloudflared` on the
+`public-edge` network (serving only the public pages at
+`https://river.ohr3023.org`), and this project's `app` container, which joins
+all three.
 
 ```
 Windows CLI machine (no local daemon)
    |  docker context "riverhost" over SSH
    v
-<docker-host>  ---------------------------------
+<docker-host>  ------------------------------------------------------
   network: shared-db (external)
     [postgres]   <- owned by the shared-postgres project
         ^
         | DATABASE_URL (role: river)
-    [app] -- publishes 5743 --> http://<portal-host>:5743
-----------------------------------------------------------
+    [app :5743] <-- harbor ------ [traefik]     <- https://<portal-host> (tailnet)
+        ^
+        | public-edge, alias river-app (bypasses Traefik)
+    [cloudflared] <- owned by the cloudflare-tunnel project
+        ^
+        | outbound-only tunnel; Cloudflare admits the public paths only
+     https://river.ohr3023.org (internet)
+----------------------------------------------------------------------
 ```
 
 ## Docker context
@@ -158,11 +168,67 @@ every connection will authenticate-fail.
   docker run --rm -v my_river_level_app_logs:/logs alpine tail /logs/river_monitor.log
   ```
   Expected: the tail of `river_monitor.log`.
-- **The portal** is at `http://<portal-host>:5743`, guarded by HTTP Basic
-  auth.
+- **The portal** is at `https://<portal-host>` through Traefik on the
+  tailnet, guarded by HTTP Basic auth. It is never reachable through the
+  public hostname.
+- **The public pages** (map, page view and edit, `/healthz`) are at
+  `https://river.ohr3023.org` through the Cloudflare tunnel — see
+  [Public edge](#public-edge).
 - **Channel credentials and `public_base_url`** (Telegram token, Twilio,
   Facebook) are set on the portal's Settings page, not in `.env` — see
   [`../explanation/security-model.md`](../explanation/security-model.md).
+
+## Public edge
+
+The public hostname `https://river.ohr3023.org` is served by a remote-managed
+Cloudflare tunnel run from the separate `cloudflare-tunnel` project (a sibling
+of `shared-postgres`). `cloudflared` makes only outbound connections, so
+`<docker-host>` publishes no port to the internet. It joins the external
+`public-edge` Docker network and forwards straight to the app at
+`http://river-app:5743` — the network alias `docker-compose.yml` gives the
+`app` service on `public-edge`. It bypasses Traefik; the tailnet path through
+Traefik at `<portal-host>` is unchanged.
+
+The tunnel's ingress rules live in the Cloudflare dashboard, not in either
+repo; the `cloudflare-tunnel` README records them. One rule for
+`river.ohr3023.org` admits only `/pin`, `/pin/...`, `/view/...`, `/edit/...`,
+`/pages/new`, `/static/...` and `/healthz`; a catch-all returns 404. The
+admin portal and the channel webhooks (`/webhook/...`) therefore stay
+tailnet-only.
+
+1. Create the shared network once on `<docker-host>`, before starting either
+   project.
+   ```bash
+   docker network create public-edge
+   ```
+   Expected: a network ID printed; `docker network ls` lists `public-edge`.
+
+2. Set `TRUSTED_PROXY_COUNT=1` in this project's `.env`, then recreate the app.
+   ```bash
+   docker compose up -d --build
+   ```
+   Expected: `docker compose ps` shows `app` healthy. Exactly one proxy hop
+   sits in front of the app on either path (Traefik on the tailnet,
+   `cloudflared` on the public edge), so the pin-flow rate limits key on the
+   real visitor — see [`../reference/environment.md`](../reference/environment.md).
+
+3. Start the tunnel from the `cloudflare-tunnel` project directory, after
+   filling `TUNNEL_TOKEN` in its `.env`.
+   ```bash
+   docker compose up -d
+   ```
+   Expected: the tunnel shows **Healthy** in the Cloudflare dashboard.
+
+4. From the CLI machine, smoke-check the public edge.
+   ```bash
+   python scripts/smoke_public_edge.py --view-token <public_token>
+   ```
+   Expected: six `PASS` lines (200 from `/healthz`, `/pin` and
+   `/view/<public_token>`; 404 from `/`, `/settings` and `/webhook/twilio`)
+   and exit status 0. Take `<public_token>` from any live page. Each run's
+   `/pin` request creates one pending page, swept after 7 days. Against
+   `--base-url https://<portal-host>` the 404 checks fail by design (the
+   tailnet serves everything), but `/healthz` should show 200.
 
 ## Constraints of this setup
 
