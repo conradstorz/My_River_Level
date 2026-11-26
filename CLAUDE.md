@@ -35,47 +35,37 @@ loudly (`:?`) if any required value is missing.
 
 ## Commands
 
+Tests only run inside the Docker network (`TEST_DATABASE_URL` points at host
+`postgres`, which the CLI machine cannot resolve), so plain `pytest` does not
+work here. `--build` is mandatory on every run: `Dockerfile.test` COPYs the
+source in at build time. Full details: `docs/howto/run-tests.md`.
+
 ```bash
-# Install dependencies (for local development / running tests)
-pip install -r requirements.txt
+# Whole suite (requires the shared-postgres server to be up)
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --build --rm test pytest -q
 
-# Run tests against a local PostgreSQL (see .env.example for TEST_DATABASE_URL)
-pytest
+# One file
+docker compose -f docker-compose.yml -f docker-compose.test.yml run --build --rm test pytest -q tests/monitor/test_polling.py
 
-# Run the full test suite in Docker (requires the shared-postgres server to be
-# up). Builds a test image that includes tests/ and runs pytest inside the
-# Docker network against the shared server. Works even when the Docker daemon
-# is remote. The river_test database is auto-created if missing. The CLI
-# machine has no buildx plugin, so .dockerignore no longer excludes tests/;
-# the production Dockerfile strips it back out with `RUN rm -rf tests`.
-docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm test
+# Parallel runs need separate databases (tmp_db drops every table)
+TEST_DB_SUFFIX=_x docker compose -f docker-compose.yml -f docker-compose.test.yml run --build --rm test pytest -q
 
-# Run a specific test file
-pytest tests/monitor/test_polling.py
-
-# Run the app with Docker (requires the shared-postgres server to be up)
-docker compose up --build
-
-# Stop
+# Run / stop the app
+docker compose up -d --build
 docker compose down
 ```
 
-## Production deployment
+The CLI machine has no buildx, so the classic builder ignores
+`Dockerfile.test.dockerignore`: never add `tests/` to `.dockerignore`; the
+production `Dockerfile` strips it with `RUN rm -rf tests`.
 
-Build and push to GitHub Container Registry:
+## Deployment
 
-```bash
-docker build -t ghcr.io/<your-org>/river-monitor:latest .
-docker push ghcr.io/<your-org>/river-monitor:latest
-```
-
-On the server:
-```bash
-docker compose pull
-docker compose up -d
-```
-
-The service runs on `http://localhost:5743`. Logs go to `logs/river_monitor.log` (rotating, 5 MB, 3 backups).
+The app is built and run on the remote Docker host (no registry) and routed
+by Traefik at `river.hpz440.ohr3023.org` (labels in `docker-compose.yml`).
+Runbook: `docs/howto/this-deployment.md`; upgrades: `docs/howto/upgrade.md`.
+Logs go to `logs/river_monitor.log` in the `app_logs` named volume (rotating,
+5 MB, 3 backups).
 
 ## Shell commands
 
@@ -101,7 +91,7 @@ back instead of leaving a container that is up but no longer monitoring.
 ```
 main.py                 — Entry point; starts all threads
 Dockerfile              — Container image definition
-docker-compose.yml      — Multi-container orchestration (app + PostgreSQL)
+docker-compose.yml      — App service; joins the external shared-db network
 monitor/
   polling.py            — USGS data fetch loop; uses dataretrieval nwis.get_iv / get_dv
   noaa_polling.py       — NOAA NWPS fetch loop; flood-category classification
