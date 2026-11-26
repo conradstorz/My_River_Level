@@ -54,10 +54,18 @@ def read(path):
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+NON_OPERATOR_DIRS = {"superpowers", "plans", "agents"}
+
+
+def _is_operator_doc(md):
+    """False for scratch/plan docs and agent-skill config under docs/agents/."""
+    return not NON_OPERATOR_DIRS.intersection(md.relative_to(DOCS).parts if md.is_relative_to(DOCS) else ())
+
+
 def doc_files():
-    """Every markdown file the checks operate on, excluding scratch/plan docs."""
+    """Every markdown file the checks operate on, excluding non-operator docs."""
     files = list(DOCS.rglob("*.md")) + [ROOT / "README.md"]
-    return [md for md in files if "superpowers" not in md.parts and "plans" not in md.parts]
+    return [md for md in files if _is_operator_doc(md)]
 
 
 def check_items(label, items, doc, fmt):
@@ -229,7 +237,7 @@ def check_placeholder_spelling():
     official_letters = {_letters_only(p) for p in PLACEHOLDERS}
     token_re = re.compile(r"<([a-z0-9_-]+)>")
     for md in DOCS.rglob("*.md"):
-        if "superpowers" in md.parts or "plans" in md.parts:
+        if not _is_operator_doc(md):
             continue
         for tok in token_re.findall(read(md)):
             if tok in PLACEHOLDERS:

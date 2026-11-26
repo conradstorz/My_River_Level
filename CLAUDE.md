@@ -227,3 +227,13 @@ once regardless of how many pages reference it.
 
 - `POST /webhook/twilio` — Twilio SMS/WhatsApp status callbacks and inbound messages (`JOIN`/`STOP`)
 - `GET|POST /webhook/facebook` — Facebook Messenger verify and inbound messages
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `conradstorz/My_River_Level`, via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` plus `docs/adr/`, both created only when needed. See `docs/agents/domain.md`.
