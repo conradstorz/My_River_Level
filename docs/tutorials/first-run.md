@@ -41,6 +41,13 @@ don't already have that network from another project, create it with
 `networks:` section of `docker-compose.yml` to point at whatever network your
 Postgres server is already on.
 
+It also joins two more external networks, `harbor` (a Traefik reverse proxy)
+and `public-edge` (a Cloudflare tunnel), and compose refuses to start the app
+while either is missing. If you use neither, create empty ones
+(`docker network create harbor`, `docker network create public-edge`) or
+delete them from the `app` service's `networks:` and the top-level
+`networks:` section.
+
 ## 3. Configure `.env`
 
 ```bash

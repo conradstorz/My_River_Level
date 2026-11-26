@@ -139,6 +139,12 @@ every connection will authenticate-fail.
 
 ## Deploy
 
+`docker-compose.yml` joins three external networks — `shared-db`, `harbor`
+and `public-edge` — and compose refuses to create the `app` container while
+any of them is missing. `public-edge` is owned by no project: create it once
+(step 1 of [Public edge](#public-edge)) before the first deploy that includes
+it.
+
 1. Build and start.
    ```bash
    docker compose up -d --build
