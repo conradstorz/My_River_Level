@@ -198,6 +198,7 @@ finish() {
 # the whole file before the first prompt, so an edit mid-run can't break it.
 # ──────────────────────────────────────────────────────────────────────────
 
+
 # Go-live wizard for River Monitor's public MVP (issue #7).
 #
 #   bash scripts/go_live_wizard.sh          # from the River checkout, on main
@@ -214,11 +215,16 @@ TUNNEL_DIR="${TUNNEL_DIR:-$RIVER_DIR/../One-Time-Tools/cloudflare-tunnel}"
 TUNNEL_PROJECT="cloudflare-tunnel"
 TUNNEL_REPO_NAME="${TUNNEL_REPO_NAME:-cloudflare-tunnel}"
 PUBLIC_URL="https://river.ohr3023.org"
+# An empty TUNNEL_TOKEN (as in the tunnel's .env.example) and this literal
+# placeholder both mean "not set yet"; neither is offered as the current value.
 PLACEHOLDER_TOKEN="placeholder-token"
 PATH_REGEX='^/(pin(/.*)?|view/.+|edit/.+|pages/new|static/.+|healthz)$'
 CF_DASHBOARD="https://one.dash.cloudflare.com/"
 BOT_USERNAME=""
 SMOKE_RESULT="not run"
+VIEW_SKIPPED=0
+ENV_WRITES=()       # "KEY → file" for every .env value written this run
+SETTINGS_WRITES=()  # River Settings keys written this run
 
 die() { warn "$1"; printf '\n'; exit 1; }
 
@@ -228,7 +234,7 @@ Usage: bash scripts/go_live_wizard.sh [--help]
 
 Walks you through taking River Monitor public at $PUBLIC_URL:
   1  preflight: River checkout on an up-to-date main, docker/gh/git ready
-  2  tunnel repo: private GitHub remote + push (skipped if origin exists)
+  2  tunnel repo: private GitHub remote, pushed (re-pushes if origin is behind)
   3  docker network public-edge on the Docker host (skipped if present)
   4  Cloudflare: create the tunnel, save TUNNEL_TOKEN to the tunnel .env
   5  Cloudflare: add the river.ohr3023.org route (path regex) + check 404 catch-all
@@ -252,10 +258,13 @@ EOF
 river_compose()  { docker compose -p "$RIVER_PROJECT" -f "$RIVER_DIR/docker-compose.yml" "$@"; }
 tunnel_compose() { docker compose -p "$TUNNEL_PROJECT" -f "$TUNNEL_DIR/docker-compose.yml" "$@"; }
 
-# river_setting_get KEY prints a Settings value from the running app.
+# river_setting_get KEY prints a Settings value from the running app, with the
+# CRs a Windows docker exec adds removed.
 river_setting_get() {
-  river_compose exec -T app python -c \
-    'import sys; from db.models import get_setting; print(get_setting(sys.argv[1]) or "")' "$1"
+  local out
+  out=$(river_compose exec -T app python -c \
+    'import sys; from db.models import get_setting; print(get_setting(sys.argv[1]) or "")' "$1") || return 1
+  printf '%s' "${out//$'\r'/}"
 }
 
 # river_setting_put KEY writes stdin as KEY's value. The value travels over
@@ -263,6 +272,28 @@ river_setting_get() {
 river_setting_put() {
   river_compose exec -T app python -c \
     'import sys; from db.models import set_setting; set_setting(sys.argv[1], sys.stdin.read().strip())' "$1"
+}
+
+# use_env_file PATH points ENV_FILE at PATH. If the file has CRLF line endings
+# (a Windows editor), it is rewritten with LF in place (keeping its mode), so
+# the library's _existing reads 'x'\r as x and "keep current" round-trips.
+use_env_file() {
+  ENV_FILE="$1"
+  [[ -f "$ENV_FILE" ]] || return 0
+  # A bash test, not grep: Git for Windows' grep ignores a pattern's lone CR.
+  [[ "$(< "$ENV_FILE")" == *$'\r'* ]] || return 0
+  local tmp; tmp=$(mktemp)
+  tr -d '\r' < "$ENV_FILE" > "$tmp"
+  cat "$tmp" > "$ENV_FILE"
+  rm -f "$tmp"
+  note "Converted CRLF line endings in $ENV_FILE to LF."
+}
+
+# save_env KEY VALUE is write_env plus a record of which file got which key,
+# for the closing summary (the library's summary names only the last ENV_FILE).
+save_env() {
+  write_env "$1" "$2"
+  ENV_WRITES+=("$1 → $ENV_FILE")
 }
 
 # drop_env_key KEY removes KEY's line from ENV_FILE (used to discard a
@@ -276,12 +307,80 @@ drop_env_key() {
   rm -f "$tmp"
 }
 
+# drain_stdin appends any lines still waiting on stdin (the rest of a
+# multi-line paste) to $PASTE_REST, hidden, so the next prompt can't swallow them.
+drain_stdin() {
+  local extra
+  PASTE_REST=""
+  while :; do
+    extra=""
+    if IFS= read -rs -t 0.2 extra; then PASTE_REST+=" $extra"; else PASTE_REST+=" $extra"; break; fi
+  done
+}
+
+# extract_tunnel_token TEXT prints the connector token found in TEXT: either a
+# bare token, or a pasted "cloudflared tunnel run --token X" / "docker run …
+# --token X" command (any spacing, line breaks, quotes, --token=X). Fails if
+# TEXT holds no plausible token.
+extract_tunnel_token() {
+  local text="${1//[$'\r\n\t\\']/ }" re words=()   # \ too: line continuations
+  re='--token[= ]+["'\'']?([A-Za-z0-9+/=_-]+)'
+  if [[ "$text" =~ $re ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  text="${text//[\"\']/}"
+  read -r -a words <<< "$text" || true
+  if (( ${#words[@]} == 1 )) && [[ "${words[0]}" =~ ^[A-Za-z0-9+/=_-]{20,}$ ]]; then
+    printf '%s' "${words[0]}"
+    return 0
+  fi
+  return 1
+}
+
+# wait_until TRIES SECS CMD... runs CMD up to TRIES times, SECS apart, until it
+# succeeds. CMD runs in this shell, so it can set variables for the caller.
+wait_until() {
+  local tries="$1" secs="$2" i
+  shift 2
+  for (( i = 1; i <= tries; i++ )); do
+    "$@" && return 0
+    if (( i < tries )); then sleep "$secs"; fi
+  done
+  return 1
+}
+
 # app_health prints the app container's health status, or "missing".
 app_health() {
   local id
   id=$(river_compose ps -q app 2>/dev/null || true)
   [[ -n "$id" ]] || { printf 'missing'; return 0; }
   docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$id" 2>/dev/null || printf 'missing'
+}
+
+# Predicates for wait_until; each records what it saw for the caller.
+app_is_healthy()    { health=$(app_health); [[ "$health" == "healthy" ]]; }
+bot_connected()     { BOT_USERNAME=$(river_setting_get telegram_bot_username || true); [[ -n "$BOT_USERNAME" ]]; }
+tunnel_registered() {
+  local logs
+  logs=$(tunnel_compose logs --tail 100 cloudflared 2>&1 || true)
+  [[ "$logs" == *"Registered tunnel connection"* ]]
+}
+
+# tunnel_repo_safe_to_push dies unless the tunnel repo keeps .env out of git
+# and has nothing uncommitted. Runs before every push, first or retried.
+tunnel_repo_safe_to_push() {
+  if git -C "$TUNNEL_DIR" ls-files --error-unmatch .env >/dev/null 2>&1; then
+    die "The tunnel repo TRACKS .env. Untrack it (git rm --cached .env) and commit before pushing."
+  fi
+  git -C "$TUNNEL_DIR" check-ignore -q .env || die "The tunnel repo does not ignore .env; fix .gitignore first."
+  [[ -z "$(git -C "$TUNNEL_DIR" status --porcelain)" ]] || die "The tunnel repo has uncommitted changes; commit them first."
+}
+
+# push_tunnel pushes the current branch to origin, with a clear way out on failure.
+push_tunnel() {
+  git -C "$TUNNEL_DIR" push -u origin HEAD \
+    || die "Pushing the tunnel repo to origin failed. Check 'gh auth status' (and 'gh auth setup-git'), then re-run: the push is retried."
 }
 
 run_wizard() {
@@ -311,7 +410,7 @@ if [[ "$(git -C "$RIVER_DIR" rev-parse --git-dir)" != "$(git -C "$RIVER_DIR" rev
   die "$RIVER_DIR is a git worktree. Run the wizard from the main River checkout."
 fi
 branch=$(git -C "$RIVER_DIR" rev-parse --abbrev-ref HEAD)
-[[ "$branch" == "main" ]] || die "River checkout is on '$branch', not main. Merge PR #9, then: git checkout main; git pull."
+[[ "$branch" == "main" ]] || die "River checkout is on '$branch', not main. Merge the MVP PR into main, then: git checkout main; git pull."
 [[ -z "$(git -C "$RIVER_DIR" status --porcelain --untracked-files=no)" ]] \
   || die "River checkout has uncommitted changes to tracked files; commit or discard them first."
 say "Fetching origin/main…"
@@ -321,12 +420,18 @@ remote_sha=$(git -C "$RIVER_DIR" rev-parse origin/main)
 [[ "$local_sha" == "$remote_sha" ]] \
   || die "Local main ($local_sha) differs from origin/main ($remote_sha). Run: git pull --ff-only"
 grep -q "public-edge" "$RIVER_DIR/docker-compose.yml" \
-  || die "main does not include the public-edge change yet. Merge PR #9, then git pull and re-run."
+  || die "main does not include the public-edge change yet. Merge the MVP PR into main, then git pull and re-run."
 step "River: main @ ${local_sha:0:7}, up to date, includes public-edge"
 
 if [[ ! -f "$TUNNEL_DIR/docker-compose.yml" ]]; then
   warn "No tunnel project at $TUNNEL_DIR."
-  ask TUNNEL_DIR "Path to the cloudflare-tunnel checkout:"
+  # No .env is in play yet: keep ask from offering a TUNNEL_DIR line out of
+  # whatever .env happens to sit in the current directory.
+  saved_env_file="$ENV_FILE"
+  ENV_FILE=""
+  ask TUNNEL_DIR "Path to the cloudflare-tunnel checkout:" || die "No path entered."
+  ENV_FILE="$saved_env_file"
+  TUNNEL_DIR="${TUNNEL_DIR/#\~/$HOME}"
   [[ -f "$TUNNEL_DIR/docker-compose.yml" ]] || die "No docker-compose.yml in $TUNNEL_DIR."
 fi
 TUNNEL_DIR=$(cd "$TUNNEL_DIR" && pwd)
@@ -336,14 +441,26 @@ pause "Preflight passed. Continue?"
 
 # ── 2 ────────────────────────────────────────────────────────────────────
 stage "Tunnel repo: private GitHub remote"
+tunnel_branch=$(git -C "$TUNNEL_DIR" rev-parse --abbrev-ref HEAD)
+[[ "$tunnel_branch" != "HEAD" ]] || die "The tunnel repo is on a detached HEAD; check out its branch first."
 if origin=$(git -C "$TUNNEL_DIR" remote get-url origin 2>/dev/null); then
-  note "origin already set ($origin): skipping."
-else
-  if git -C "$TUNNEL_DIR" ls-files --error-unmatch .env >/dev/null 2>&1; then
-    die "The tunnel repo TRACKS .env. Untrack it (git rm --cached .env) and commit before pushing."
+  # origin exists, but an earlier run's push may have failed: compare branches.
+  remote_tip=$(git -C "$TUNNEL_DIR" ls-remote origin "refs/heads/$tunnel_branch") \
+    || die "Can't reach origin ($origin). Check 'gh auth status', then re-run."
+  remote_tip="${remote_tip%%[[:space:]]*}"
+  local_tip=$(git -C "$TUNNEL_DIR" rev-parse HEAD)
+  if [[ "$remote_tip" == "$local_tip" ]]; then
+    note "origin ($origin) already has $tunnel_branch @ ${local_tip:0:7}: skipping."
+  elif [[ -z "$remote_tip" ]] || git -C "$TUNNEL_DIR" merge-base --is-ancestor "$remote_tip" HEAD 2>/dev/null; then
+    say "origin ($origin) is missing or behind on $tunnel_branch; pushing."
+    tunnel_repo_safe_to_push
+    push_tunnel
+    printf '  %s✓ pushed%s %s to %s\n' "$GREEN" "$RESET" "$tunnel_branch" "$origin"
+  else
+    die "origin's $tunnel_branch has commits the local tunnel repo lacks. Reconcile by hand (git pull), then re-run."
   fi
-  git -C "$TUNNEL_DIR" check-ignore -q .env || die "The tunnel repo does not ignore .env; fix .gitignore first."
-  [[ -z "$(git -C "$TUNNEL_DIR" status --porcelain)" ]] || die "The tunnel repo has uncommitted changes; commit them first."
+else
+  tunnel_repo_safe_to_push
   owner=$(gh api user --jq .login)
   say "This creates the PRIVATE repo $owner/$TUNNEL_REPO_NAME and pushes the tunnel project."
   note ".env is gitignored and stays local."
@@ -351,9 +468,10 @@ else
     if gh repo view "$owner/$TUNNEL_REPO_NAME" >/dev/null 2>&1; then
       note "$owner/$TUNNEL_REPO_NAME already exists on GitHub; adding it as origin."
       git -C "$TUNNEL_DIR" remote add origin "https://github.com/$owner/$TUNNEL_REPO_NAME.git"
-      git -C "$TUNNEL_DIR" push -u origin HEAD
+      push_tunnel
     else
-      gh repo create "$TUNNEL_REPO_NAME" --private --source "$TUNNEL_DIR" --remote origin --push
+      gh repo create "$TUNNEL_REPO_NAME" --private --source "$TUNNEL_DIR" --remote origin --push \
+        || die "gh repo create failed. If origin was added, re-run: the push is retried."
     fi
     vis=$(gh repo view "$owner/$TUNNEL_REPO_NAME" --json visibility --jq .visibility 2>/dev/null || echo unknown)
     [[ "$vis" == "PRIVATE" ]] || warn "GitHub reports visibility '$vis' for $owner/$TUNNEL_REPO_NAME; make it private."
@@ -382,10 +500,9 @@ pause
 
 # ── 4 ────────────────────────────────────────────────────────────────────
 stage "Cloudflare: create the tunnel and save its token"
-ENV_FILE="$TUNNEL_DIR/.env"
-[[ -f "$ENV_FILE" ]] || [[ ! -f "$TUNNEL_DIR/.env.example" ]] || (umask 077 && cp "$TUNNEL_DIR/.env.example" "$ENV_FILE")
+[[ -f "$TUNNEL_DIR/.env" ]] || [[ ! -f "$TUNNEL_DIR/.env.example" ]] || (umask 077 && cp "$TUNNEL_DIR/.env.example" "$TUNNEL_DIR/.env")
+use_env_file "$TUNNEL_DIR/.env"
 current=$(_existing TUNNEL_TOKEN || true)
-current="${current%$'\r'}"   # tolerate CRLF .env files
 need_token=1
 if [[ "$current" == "$PLACEHOLDER_TOKEN" ]]; then
   drop_env_key TUNNEL_TOKEN
@@ -403,15 +520,15 @@ if (( need_token )); then
   note "If the tunnel already exists: open it → Configure → copy the same command."
   while :; do
     ask_secret TUNNEL_TOKEN "Paste the tunnel token (hidden):" || die "No token entered."
-    TUNNEL_TOKEN="${TUNNEL_TOKEN%"${TUNNEL_TOKEN##*[![:space:]]}"}"  # trim trailing space
-    TUNNEL_TOKEN="${TUNNEL_TOKEN##* }"                                 # keep last word
-    if [[ -z "$TUNNEL_TOKEN" || "$TUNNEL_TOKEN" == "$PLACEHOLDER_TOKEN" || "$TUNNEL_TOKEN" == --* ]]; then
-      warn "That isn't a tunnel token; try again."
-      continue
+    drain_stdin   # a multi-line paste must not leak into the next prompt
+    if TUNNEL_TOKEN=$(extract_tunnel_token "$TUNNEL_TOKEN $PASTE_REST") \
+        && [[ "$TUNNEL_TOKEN" != "$PLACEHOLDER_TOKEN" ]]; then
+      break
     fi
-    break
+    warn "No tunnel token found in that paste; try again."
   done
-  write_env TUNNEL_TOKEN "$TUNNEL_TOKEN"
+  PASTE_REST=""
+  save_env TUNNEL_TOKEN "$TUNNEL_TOKEN"
   unset TUNNEL_TOKEN
 fi
 pause
@@ -439,13 +556,12 @@ pause
 
 # ── 6 ────────────────────────────────────────────────────────────────────
 stage "River: trust one proxy hop"
-ENV_FILE="$RIVER_DIR/.env"
+use_env_file "$RIVER_DIR/.env"
 say "Behind cloudflared (public) or Traefik (tailnet) there is exactly one proxy hop."
-proxy_count=$(_existing TRUSTED_PROXY_COUNT || true)
-if [[ "${proxy_count%$'\r'}" == "1" ]]; then
+if [[ "$(_existing TRUSTED_PROXY_COUNT || true)" == "1" ]]; then
   note "TRUSTED_PROXY_COUNT=1 already set in $ENV_FILE: skipping."
 else
-  write_env TRUSTED_PROXY_COUNT 1
+  save_env TRUSTED_PROXY_COUNT 1
 fi
 pause
 
@@ -459,19 +575,15 @@ else
 fi
 say "Waiting for the app to report healthy (up to 3 minutes)…"
 health=""
-for _ in $(seq 1 36); do
-  health=$(app_health)
-  [[ "$health" == "healthy" ]] && break
-  sleep 5
-done
-[[ "$health" == "healthy" ]] || die "App is '$health', not healthy. See docs/howto/diagnose.md, then re-run."
+wait_until 36 5 app_is_healthy \
+  || die "App is '$health', not healthy. See docs/howto/diagnose.md, then re-run."
 printf '  %s✓ app healthy%s\n' "$GREEN" "$RESET"
 pause
 
 # ── 8 ────────────────────────────────────────────────────────────────────
 stage "Telegram bot token and public URL into Settings"
 need_bot=1
-if [[ -n "$(river_setting_get telegram_bot_token | tr -d '\r')" ]]; then
+if [[ -n "$(river_setting_get telegram_bot_token)" ]]; then
   note "A Telegram bot token is already set in Settings."
   confirm "Replace it?" || need_bot=0
 fi
@@ -491,21 +603,18 @@ if (( need_bot )); then
   printf '' | river_setting_put telegram_bot_username
   printf '%s' "$TG_BOT_TOKEN" | river_setting_put telegram_bot_token
   unset TG_BOT_TOKEN
+  SETTINGS_WRITES+=("telegram_bot_token")
   printf '  %s✓ wrote%s telegram_bot_token → Settings\n' "$GREEN" "$RESET"
 fi
-if [[ "$(river_setting_get public_base_url | tr -d '\r')" == "$PUBLIC_URL" ]]; then
+if [[ "$(river_setting_get public_base_url)" == "$PUBLIC_URL" ]]; then
   note "public_base_url already $PUBLIC_URL."
 else
   printf '%s' "$PUBLIC_URL" | river_setting_put public_base_url
+  SETTINGS_WRITES+=("public_base_url")
   printf '  %s✓ wrote%s public_base_url=%s → Settings\n' "$GREEN" "$RESET" "$PUBLIC_URL"
 fi
 say "Waiting for the bot to connect (it records its username; up to 90 s)…"
-for _ in $(seq 1 18); do
-  BOT_USERNAME=$(river_setting_get telegram_bot_username | tr -d '\r' || true)
-  [[ -n "$BOT_USERNAME" ]] && break
-  sleep 5
-done
-if [[ -n "$BOT_USERNAME" ]]; then
+if wait_until 18 5 bot_connected; then
   printf '  %s✓ bot connected%s as @%s\n' "$GREEN" "$RESET" "$BOT_USERNAME"
 else
   warn "No bot username yet: the token may be wrong (see docs/howto/diagnose.md)."
@@ -518,13 +627,7 @@ stage "Start the Cloudflare tunnel"
 if confirm "Start (or update) the tunnel project (docker compose up -d)?"; then
   tunnel_compose up -d
   say "Waiting for a registered tunnel connection (up to 60 s)…"
-  registered=0
-  for _ in $(seq 1 12); do
-    logs=$(tunnel_compose logs --tail 100 cloudflared 2>&1 || true)
-    if [[ "$logs" == *"Registered tunnel connection"* ]]; then registered=1; break; fi
-    sleep 5
-  done
-  if (( registered )); then
+  if wait_until 12 5 tunnel_registered; then
     printf '  %s✓ tunnel connected%s\n' "$GREEN" "$RESET"
   else
     warn "No 'Registered tunnel connection' yet. Check: docker compose logs cloudflared (in $TUNNEL_DIR)."
@@ -538,18 +641,28 @@ pause
 stage "Smoke-check the public edge"
 found=$(river_compose exec -T app python -c \
   "from db.models import get_db; c=get_db(); cur=c.cursor(); cur.execute(\"select public_token from user_pages where status='active' order by id desc limit 1\"); r=cur.fetchone(); print(r['public_token'] if r else '')" \
-  2>/dev/null | tr -d '\r' || true)
+  2>/dev/null || true)
+found="${found//$'\r'/}"
+# The public token is a page's only access control: never print it in full.
 if [[ -n "$found" ]]; then
-  say "Latest active page's public token: $found"
-  note "Enter uses it; type - to skip the /view check; or paste another token."
+  say "Found the latest active page (public token ${found:0:3}…, not shown in full)."
+  note "Enter uses it; type - to skip the /view check; or paste another token (hidden)."
 else
-  note "No active page found. Paste a public token, or press Enter to skip the /view check."
+  note "No active page yet (normal at first go-live): press Enter to skip the /view"
+  note "check, or paste a page's public token (hidden)."
 fi
-read -r -p "  View token: " view_token || true
+view_token=""
+read -rs -p "  View token: " view_token || true
+printf '\n'
+view_token="${view_token//[[:space:]]/}"
 [[ -z "$view_token" ]] && view_token="$found"
 [[ "$view_token" == "-" ]] && view_token=""
 smoke_args=(--base-url "$PUBLIC_URL")
-[[ -n "$view_token" ]] && smoke_args+=(--view-token "$view_token")
+if [[ -n "$view_token" ]]; then
+  smoke_args+=(--view-token "$view_token")
+else
+  VIEW_SKIPPED=1
+fi
 if command -v uv >/dev/null 2>&1; then
   runner=(uv run --no-project python)
 elif command -v python >/dev/null 2>&1; then
@@ -558,6 +671,7 @@ else
   runner=(python3)
 fi
 printf '\n'
+# The smoke script prints the view token masked, so its output is safe to show.
 if "${runner[@]}" "$RIVER_DIR/scripts/smoke_public_edge.py" "${smoke_args[@]}"; then
   SMOKE_RESULT="PASS"
   printf '\n  %s✓ smoke check passed%s\n' "$GREEN" "$RESET"
@@ -566,6 +680,12 @@ else
   warn "Smoke check FAILED. See docs/howto/this-deployment.md (Public edge) and re-run."
   SKIPPED+=("make the smoke check pass: python scripts/smoke_public_edge.py")
 fi
+if (( VIEW_SKIPPED )); then
+  warn "The /view check was SKIPPED (no page token given)."
+  SKIPPED+=("/view check: after your first pin save, run: python scripts/smoke_public_edge.py --view-token <public_token>")
+fi
+view_token=""
+found=""
 pause
 
 # ── 11 ───────────────────────────────────────────────────────────────────
@@ -582,10 +702,19 @@ if ! confirm "Did the bot reply with a $PUBLIC_URL map link?"; then
   SKIPPED+=("bot /start reply (see docs/howto/diagnose.md#telegram-bot-is-silent)")
 fi
 
+WRITTEN_ENV=()   # finish would name only the last ENV_FILE; the per-file list follows
 finish
+for w in ${ENV_WRITES[@]+"${ENV_WRITES[@]}"}; do note "wrote $w"; done
+(( ${#SETTINGS_WRITES[@]} )) && note "wrote to River Settings: ${SETTINGS_WRITES[*]}"
 note "where values live: TUNNEL_TOKEN → $TUNNEL_DIR/.env; TRUSTED_PROXY_COUNT → $RIVER_DIR/.env;"
 note "                   telegram_bot_token, public_base_url → River Settings"
-note "smoke check: $SMOKE_RESULT"
+if (( VIEW_SKIPPED )); then
+  note "smoke check: $SMOKE_RESULT (the /view check was SKIPPED)"
+  warn "After your first pin save, finish the smoke check with:"
+  note "  python scripts/smoke_public_edge.py --view-token <public_token>"
+else
+  note "smoke check: $SMOKE_RESULT"
+fi
 printf '\n'
 [[ "$SMOKE_RESULT" == "PASS" ]]
 }

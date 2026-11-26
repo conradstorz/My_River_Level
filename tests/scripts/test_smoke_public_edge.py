@@ -72,8 +72,25 @@ def test_healthy_edge_passes_every_check_and_exits_zero(edge, capsys):
     checks = [line for line in lines if line.startswith(("PASS", "FAIL"))]
     assert len(checks) == 6
     assert all(line.startswith("PASS") for line in checks)
-    for path in ("/healthz", "/pin", f"/view/{TOKEN}", "/settings", "/webhook/twilio"):
+    for path in ("/healthz", "/pin", "/view/", "/settings", "/webhook/twilio"):
         assert any(path in line for line in checks), path
+
+
+def test_view_token_is_never_printed_in_full(edge, capsys):
+    # The public token is a page's only access control; keep it off the
+    # terminal (and out of scrollback and logs) whether the check passes or fails.
+    base, routes = edge
+    code = smoke.main(["--base-url", base, "--view-token", TOKEN])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert TOKEN not in out
+    assert "PASS /view/pub...: 200" in out
+
+    routes[f"/view/{TOKEN}"] = 500
+    smoke.main(["--base-url", base, "--view-token", TOKEN])
+    out = capsys.readouterr().out
+    assert TOKEN not in out
+    assert "FAIL /view/pub...: expected 200, got 500" in out
 
 
 def test_admin_route_exposed_fails_that_check_and_exits_nonzero(edge, capsys):
