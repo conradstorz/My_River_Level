@@ -19,6 +19,7 @@ Commands an operator runs, all from the project directory.
 | command | purpose | notes |
 |---|---|---|
 | `docker compose up -d --build` | Rebuild the image from the checked-out source and recreate the container (deploy and upgrade). | `docker-compose.yml` builds from local source (`build: .`, no `image:`) — there is no registry image to pull. Full procedure: [`../howto/upgrade.md`](../howto/upgrade.md). |
+| `bash scripts/go_live_wizard.sh [--help]` | Interactive go-live wizard for the public edge (Git Bash, CLI machine). | Must run from the main checkout on an up-to-date `main`. Creates the tunnel repo's private remote and the `public-edge` network if missing, captures `TUNNEL_TOKEN` into the tunnel `.env`, sets `TRUSTED_PROXY_COUNT=1`, rebuilds River, writes `telegram_bot_token` and `public_base_url` to Settings over `docker exec` stdin, starts the tunnel, then runs the smoke check. Re-runnable; `--help` only prints the stages. See [`../howto/this-deployment.md`](../howto/this-deployment.md#public-edge). |
 
 ## Tests
 

@@ -143,7 +143,8 @@ every connection will authenticate-fail.
 and `public-edge` — and compose refuses to create the `app` container while
 any of them is missing. `public-edge` is owned by no project: create it once
 (step 1 of [Public edge](#public-edge)) before the first deploy that includes
-it.
+it. For the first public go-live, `scripts/go_live_wizard.sh` does this and
+the deploy for you — see [Public edge](#public-edge).
 
 1. Build and start.
    ```bash
@@ -194,6 +195,22 @@ of `shared-postgres`). `cloudflared` makes only outbound connections, so
 `http://river-app:5743` — the network alias `docker-compose.yml` gives the
 `app` service on `public-edge`. It bypasses Traefik; the tailnet path through
 Traefik at `<portal-host>` is unchanged.
+
+**Going live the first time? Run the wizard instead of the steps below.**
+From the main River checkout, on an up-to-date `main`, in Git Bash:
+
+```bash
+bash scripts/go_live_wizard.sh
+```
+
+It walks through every human-only step in a safe order: preflight (River on
+an up-to-date `main`), the tunnel repo's private GitHub remote, the
+`public-edge` network, the Cloudflare tunnel token and route,
+`TRUSTED_PROXY_COUNT=1`, the River rebuild, the Telegram bot token and
+`public_base_url` (written to Settings over `docker exec` stdin, never
+echoed), starting the tunnel, the smoke check below, and a `/start` to the
+bot. It is safe to re-run: finished steps are skipped. `--help` lists the
+stages without doing anything.
 
 The tunnel's ingress rules live in the Cloudflare dashboard, not in either
 repo; the `cloudflare-tunnel` README records them. One rule for
