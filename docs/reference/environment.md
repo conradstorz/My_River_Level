@@ -13,4 +13,4 @@ Variables read from the container environment (compose passes them from `.env`);
 | `TEST_DB_SUFFIX` | No (compose only) | `` (empty) | `docker-compose.test.yml` | Appended to `TEST_DATABASE_URL` by the test overlay, so parallel test runs can target distinct databases, e.g. `TEST_DB_SUFFIX=_x`. |
 | `TRUSTED_PROXY_COUNT` | No | `0` | `web/app.py` (`create_app`) | Number of reverse proxies whose `X-Forwarded-For` / `X-Forwarded-Proto` to trust; `0` disables `ProxyFix` entirely — see [`../howto/reverse-proxy.md`](../howto/reverse-proxy.md). `docker-compose.yml` forwards it from `.env` (default `0`). Set it to `1` on the maintainer's deployment: Traefik on the tailnet and the Cloudflare tunnel at `https://river.ohr3023.org` (which bypasses Traefik) are each exactly one hop in front of the app — see [`../howto/this-deployment.md`](../howto/this-deployment.md#public-edge). |
 
-Verified against commit 20c729b
+Verified against commit 39c5272
