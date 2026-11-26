@@ -25,6 +25,10 @@ Task-oriented instructions for an operator who already has it running.
 - [This deployment](howto/this-deployment.md) — the maintainer's own
   SSH-remote-Docker, shared-Postgres runbook; a worked example, not the
   generic path.
+- [Public edge](howto/this-deployment.md#public-edge) — the Cloudflare
+  tunnel that publishes only the public pages at `https://river.ohr3023.org`:
+  go live with `bash scripts/go_live_wizard.sh`, then confirm with
+  `python scripts/smoke_public_edge.py --view-token <public_token>`.
 - [Upgrade](howto/upgrade.md) — pulling new code and rebuilding the container
   without losing data.
 - [Backup and restore](howto/backup-restore.md) — what a `pg_dump` of
@@ -102,6 +106,7 @@ Background on why the system behaves the way it does.
 ## This deployment
 
 [This deployment](howto/this-deployment.md) documents the maintainer's own
-setup in full — SSH Docker context, shared PostgreSQL server, and the exact
-topology it runs on — as a concrete, worked example once the generic
+setup in full — SSH Docker context, shared PostgreSQL server, the Cloudflare
+tunnel public edge, and the exact topology it runs on — as a concrete, worked
+example once the generic
 [tutorial](tutorials/first-run.md) above makes sense.

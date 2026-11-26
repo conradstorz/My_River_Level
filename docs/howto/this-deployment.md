@@ -209,8 +209,11 @@ an up-to-date `main`), the tunnel repo's private GitHub remote, the
 `TRUSTED_PROXY_COUNT=1`, the River rebuild, the Telegram bot token and
 `public_base_url` (written to Settings over `docker exec` stdin, never
 echoed), starting the tunnel, the smoke check below, and a `/start` to the
-bot. It is safe to re-run: finished steps are skipped. `--help` lists the
-stages without doing anything.
+bot. It is safe to re-run: finished steps are skipped, and a tunnel-repo push
+that failed is retried. At first go-live no page exists yet, so the smoke
+check's `/view` test is skipped and the closing summary says so; after your
+first pin save, run step 4 below with that page's `public_token`. `--help`
+lists the stages without doing anything.
 
 The tunnel's ingress rules live in the Cloudflare dashboard, not in either
 repo; the `cloudflare-tunnel` README records them. One rule for
@@ -248,7 +251,8 @@ tailnet-only.
    ```
    Expected: six `PASS` lines (200 from `/healthz`, `/pin` and
    `/view/<public_token>`; 404 from `/`, `/settings` and `/webhook/twilio`)
-   and exit status 0. Take `<public_token>` from any live page. Each run's
+   and exit status 0; the token is printed only as its first three
+   characters. Take `<public_token>` from any live page. Each run's
    `/pin` request creates one pending page, swept after 7 days. Against
    `--base-url https://<portal-host>` the 404 checks fail by design (the
    tailnet serves everything), but `/healthz` should show 200.
