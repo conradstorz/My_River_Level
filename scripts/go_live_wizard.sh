@@ -385,6 +385,7 @@ stage "Cloudflare: create the tunnel and save its token"
 ENV_FILE="$TUNNEL_DIR/.env"
 [[ -f "$ENV_FILE" ]] || [[ ! -f "$TUNNEL_DIR/.env.example" ]] || (umask 077 && cp "$TUNNEL_DIR/.env.example" "$ENV_FILE")
 current=$(_existing TUNNEL_TOKEN || true)
+current="${current%$'\r'}"   # tolerate CRLF .env files
 need_token=1
 if [[ "$current" == "$PLACEHOLDER_TOKEN" ]]; then
   drop_env_key TUNNEL_TOKEN
@@ -440,7 +441,8 @@ pause
 stage "River: trust one proxy hop"
 ENV_FILE="$RIVER_DIR/.env"
 say "Behind cloudflared (public) or Traefik (tailnet) there is exactly one proxy hop."
-if [[ "$(_existing TRUSTED_PROXY_COUNT || true)" == "1" ]]; then
+proxy_count=$(_existing TRUSTED_PROXY_COUNT || true)
+if [[ "${proxy_count%$'\r'}" == "1" ]]; then
   note "TRUSTED_PROXY_COUNT=1 already set in $ENV_FILE: skipping."
 else
   write_env TRUSTED_PROXY_COUNT 1
@@ -485,6 +487,8 @@ if (( need_bot )); then
     [[ "$TG_BOT_TOKEN" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]] && break
     warn "That doesn't look like a bot token (digits:letters); try again."
   done
+  # Clear the old username so the wait below proves the NEW token connects.
+  printf '' | river_setting_put telegram_bot_username
   printf '%s' "$TG_BOT_TOKEN" | river_setting_put telegram_bot_token
   unset TG_BOT_TOKEN
   printf '  %s✓ wrote%s telegram_bot_token → Settings\n' "$GREEN" "$RESET"
@@ -579,6 +583,8 @@ if ! confirm "Did the bot reply with a $PUBLIC_URL map link?"; then
 fi
 
 finish
+note "where values live: TUNNEL_TOKEN → $TUNNEL_DIR/.env; TRUSTED_PROXY_COUNT → $RIVER_DIR/.env;"
+note "                   telegram_bot_token, public_base_url → River Settings"
 note "smoke check: $SMOKE_RESULT"
 printf '\n'
 [[ "$SMOKE_RESULT" == "PASS" ]]
