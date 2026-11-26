@@ -242,6 +242,7 @@ SETTINGS_GROUPS = [
             {"subtitle": "Facebook Messenger", "fields": [
                 ("facebook_page_token", "Facebook Page Token", "password"),
                 ("facebook_verify_token", "Facebook Verify Token", "text"),
+                ("facebook_app_secret", "Facebook App Secret", "password"),
             ]},
         ],
     },

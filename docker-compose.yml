@@ -7,8 +7,11 @@
 services:
   app:
     build: .
-    ports:
-      - "5743:5743"
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.river.rule: Host(`river.hpz440.ohr3023.org`)
+      traefik.http.services.river.loadbalancer.server.port: "5743"
+      harbor.description: "River level"
     environment:
       # Secrets come from .env (gitignored); :? fails loudly if unset.
       # Safe to interpolate: none of these values contain a `$`.
@@ -23,6 +26,10 @@ services:
       # written as `$$` or the salt is silently eaten and no password can
       # ever match. See .env.example for a generator that escapes for you.
       - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:?set ADMIN_PASSWORD_HASH in .env}
+      # Number of reverse proxies whose X-Forwarded-For to trust (0 = none).
+      # Rate limits key on the client address, so behind a proxy this must be
+      # set or every visitor shares the proxy's bucket.
+      - TRUSTED_PROXY_COUNT=${TRUSTED_PROXY_COUNT:-0}
     volumes:
       # Named volume (not a host bind mount) so logs persist and the app runs
       # against a remote Docker daemon, which can't mount Windows host paths.
@@ -39,12 +46,15 @@ services:
       retries: 3
     networks:
       - shared-db
+      - harbor
 
 # Owned by the shared-postgres project; we join it as an external network.
 networks:
   shared-db:
     external: true
     name: shared-db
+  harbor:
+    external: true
 
 volumes:
   app_logs:

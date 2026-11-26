@@ -348,7 +348,8 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
 
     Returns the updated row, or None when the token is unknown, the page is
     stopped, or another chat already owns it. A page that already has its
-    pin becomes active; one still waiting for a pin stays pending.
+    pin becomes active; one still waiting for a pin stays pending. Any other
+    page this chat owned is stopped, so a chat has at most one live page.
     """
     chat_id = int(chat_id)
     conn = get_conn(db_path)
@@ -366,6 +367,13 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
             new_status = "active"
         else:
             new_status = page["status"]
+        # A chat owns at most one live page: binding a new one closes any
+        # other page this chat still had open, so its sources can retire.
+        cur.execute(
+            """UPDATE user_pages SET status='stopped'
+               WHERE owner_chat_id=%s AND id<>%s AND status<>'stopped'""",
+            (chat_id, page["id"])
+        )
         cur.execute(
             "UPDATE user_pages SET owner_chat_id=%s, status=%s WHERE id=%s RETURNING *",
             (chat_id, new_status, page["id"])
