@@ -1,7 +1,7 @@
 import pytest
 
 from db.models import (
-    bind_page_to_chat, create_pin_page, create_user_page,
+    ChatHasLivePage, bind_page_to_chat, create_pin_page, create_user_page,
     get_active_page_subscribers, get_db, get_page_by_edit_token,
     get_page_for_chat, get_page_gauges, get_page_sites,
     save_pin, set_page_sensitivity, set_page_status,
@@ -71,14 +71,38 @@ def test_rebind_does_not_unpause_a_paused_page(tmp_db):
     assert bound["status"] == "paused"
 
 
-def test_binding_a_new_page_stops_the_chats_previous_page(tmp_db):
-    first = create_pin_page(42, tmp_db)
-    save_pin(first["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
+def test_binding_a_new_page_replaces_a_pinless_pending_page(tmp_db):
+    first = create_pin_page(42, tmp_db)              # bare /start, never pinned
     second = create_pin_page(None, tmp_db)          # web-first, unbound
     bound = bind_page_to_chat(second["edit_token"], 42, "Ann", tmp_db)
     assert bound["owner_chat_id"] == 42
     assert get_page_by_edit_token(first["edit_token"], tmp_db)["status"] == "stopped"
     assert get_page_for_chat(42, tmp_db)["id"] == second["id"]
+
+
+@pytest.mark.parametrize("status", ["active", "paused"])
+def test_binding_refuses_to_replace_a_live_page(tmp_db, status):
+    first = create_pin_page(42, tmp_db)
+    save_pin(first["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
+    set_page_status(first["id"], status, tmp_db)
+    second = create_pin_page(None, tmp_db)
+    with pytest.raises(ChatHasLivePage) as excinfo:
+        bind_page_to_chat(second["edit_token"], 42, "Ann", tmp_db)
+    assert excinfo.value.page["id"] == first["id"]
+    assert get_page_by_edit_token(first["edit_token"], tmp_db)["status"] == status
+    unbound = get_page_by_edit_token(second["edit_token"], tmp_db)
+    assert unbound["owner_chat_id"] is None
+    assert get_active_page_subscribers(second["id"], tmp_db) == []
+
+
+def test_binding_after_stop_replaces_normally(tmp_db):
+    first = create_pin_page(42, tmp_db)
+    save_pin(first["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
+    set_page_status(first["id"], "active", tmp_db)
+    set_page_status(first["id"], "stopped", tmp_db)
+    second = create_pin_page(None, tmp_db)
+    bound = bind_page_to_chat(second["edit_token"], 42, "Ann", tmp_db)
+    assert bound["owner_chat_id"] == 42
 
 
 def test_bind_refuses_unknown_token_and_foreign_page(tmp_db):

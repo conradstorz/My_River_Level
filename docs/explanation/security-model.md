@@ -39,6 +39,14 @@ call rather than accepting unsigned ones, since accepting them would let
 anyone impersonate a subscriber's `JOIN`/`STOP` command or a Messenger
 message.
 
+The Telegram `/start <edit_token>` deep link binds a page to whichever chat
+taps it, and the person who sent the link keeps its edit token. So a chat
+that already has a live pin page is never rebound by tapping a different
+page's link: the existing page stays live, the new page stays unbound, and
+the bot tells the user to send `/stop` first if they really mean to switch.
+Only a deliberate `/stop` from the chat itself releases its page (see
+[`telegram-commands.md`](../reference/telegram-commands.md)).
+
 The pin routes are the one place an anonymous visitor's click triggers real
 third-party API calls (NLDI, NWPS, USGS), so `web/ratelimit.py`'s
 `RateLimiter` throttles them: 10 new pending pages per IP per day, 20
