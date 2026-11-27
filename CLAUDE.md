@@ -116,7 +116,9 @@ web/
   app.py                — Flask app factory
   auth.py               — HTTP Basic guard; PUBLIC_ENDPOINTS allowlist
   health.py             — GET /healthz worker-thread liveness
-  ratelimit.py          — In-process sliding-window limiter for the public pin routes
+  ratelimit.py          — In-process limiters for the public pin and editor routes:
+                          sliding-window RateLimiter, per-visitor ConcurrencyLimiter,
+                          client_key (IPv6 folded to its /64)
   routes.py             — Dashboard, Sites, Subscribers, Settings, Broadcast,
                           user landing pages (/pages, /view, /edit, /admin/pages), webhooks
 db/

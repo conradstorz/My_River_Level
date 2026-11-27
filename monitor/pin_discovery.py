@@ -12,8 +12,9 @@ GNIS river name on either its position or comid endpoint, so the river
 name is instead derived from the names of the gauges found on the stem.
 
 NOAA gauges have no NLDI layer. Each proposed USGS site (the nearest
-MAX_NOAA_PAIRING_LOOKUPS of them) is looked up on the NWPS per-gauge endpoint (it resolves a USGS number to its LID), so a matched
-NOAA gauge inherits the site's upstream/downstream tag; the NWPS bounding-box
+MAX_NOAA_PAIRING_LOOKUPS of them) is looked up on the NWPS per-gauge
+endpoint (it resolves a USGS number to its LID), so a matched NOAA gauge
+inherits the site's upstream/downstream tag; the NWPS bounding-box
 listing then adds any other gauges in range as "nearby". The listing itself
 publishes no usgsId, which is why the match goes through the per-gauge call.
 
@@ -235,7 +236,8 @@ def discover(lat, lon, *, reach_km, fallback_radius_miles):
                     for number, name, slat, slon in _navigate(comid, direction, reach_km):
                         raw.append((number, name, slat, slon, tag))
                 except Exception as exc:
-                    logger.warning("NLDI %s navigation failed for comid %s: %s", direction, comid, exc)
+                    logger.warning("NLDI %s navigation failed for comid %s: %s",
+                                   direction, comid, exc)
     except Exception as exc:
         logger.warning("NLDI snap failed for %s,%s: %s", lat, lon, exc)
 
