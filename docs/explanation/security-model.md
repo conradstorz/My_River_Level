@@ -61,6 +61,25 @@ than through a server-rendered template, the page's own script escapes each
 field by hand before building markup from it. Neither path ever inserts a
 gauge name unescaped.
 
+## Baseline hygiene on every response
+
+`web/app.py` applies a few blanket rules no matter which guard a route uses.
+Request bodies over 64 KB are refused with 413 before the auth guard or the
+route sees them, since nothing legitimate is anywhere near that size and the
+pin routes are open to anonymous visitors. Visitor-supplied names (the page
+name on `/pages/new`, the river name on a pin save) must be text of at most
+100 characters, so a crafted JSON body gets a 400 rather than a 500 or an
+unbounded row. Every response, including error pages, carries
+`Referrer-Policy: no-referrer` (edit and view links are bearer tokens in the
+URL, so they must not leak to third-party hosts in a `Referer`),
+`X-Content-Type-Options: nosniff`, and both `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'none'` against clickjacking. Every
+Bootstrap and Leaflet tag loaded from a CDN carries an `integrity` hash and
+`crossorigin`, so a tampered CDN file is refused by the browser; bumping one
+of those pinned versions means recomputing its hash. The session cookie
+(used only for flash messages) is `SameSite=Lax`, and `Secure` whenever
+`TRUSTED_PROXY_COUNT` is above 0, i.e. behind the HTTPS edge.
+
 ## What is public by design
 
 Three routes need no credential, token, or signature at all, because they

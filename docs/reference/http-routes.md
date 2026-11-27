@@ -70,4 +70,10 @@ Neither Basic auth, a URL token, nor a provider signature.
 | GET, POST | `/pages/new` | open | View the page-creation form (GET), or create a public landing page (POST). | — |
 | GET | `/pin` | open | Web-first entry: create a pending page and open its map. | 10 per IP per day |
 
+## Applies to every route
+
+- A request body over 64 KB (`MAX_REQUEST_BYTES` in `web/app.py`) is refused with 413, before auth or routing.
+- A page name (`POST /pages/new`) or river name (`POST /pin/<edit_token>/save`) must be text of at most 100 characters after trimming; anything else is a 400 with a message.
+- Every response, errors included, carries `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`.
+
 Verified against commit 20c729b

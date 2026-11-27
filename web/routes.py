@@ -105,6 +105,26 @@ def _parse_coordinates(payload):
     return lat, lon
 
 
+MAX_NAME_LENGTH = 100
+
+
+def _clean_name(value, label):
+    """Validate a visitor-supplied page/river name.
+
+    Returns ``(name, error)``: ``name`` is the trimmed string, or None when
+    the value is missing or blank; ``error`` is a message when the value is
+    not a string or is longer than MAX_NAME_LENGTH after trimming.
+    """
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        return None, f"{label} must be text."
+    value = value.strip()
+    if len(value) > MAX_NAME_LENGTH:
+        return None, f"{label} must be at most {MAX_NAME_LENGTH} characters."
+    return value or None, None
+
+
 def _client_ip():
     return request.remote_addr or "unknown"
 
@@ -645,7 +665,10 @@ def register_routes(app):
         page with its public and edit tokens; GET renders the creation form.
         """
         if request.method == "POST":
-            page_name = request.form.get("page_name", "").strip()
+            page_name, error = _clean_name(request.form.get("page_name"), "Page name")
+            if error:
+                flash(error, "danger")
+                return render_template("page_new.html"), 400
             if not page_name:
                 flash("Page name is required.", "danger")
                 return render_template("page_new.html")
@@ -721,6 +744,9 @@ def register_routes(app):
             return jsonify({"error": "Choose at least one source."}), 400
         if len(sources) > MAX_PIN_SOURCES:
             return jsonify({"error": "Too many sources; choose at most 30."}), 400
+        river_name, error = _clean_name(payload.get("river_name"), "River name")
+        if error:
+            return jsonify({"error": error}), 400
 
         usgs_sites, noaa_gauges, skipped = [], [], []
         for src in sources:
@@ -753,7 +779,6 @@ def register_routes(app):
             return jsonify({"error": "None of the chosen sources could be verified.",
                             "skipped": skipped}), 400
 
-        river_name = (payload.get("river_name") or "").strip() or None
         save_pin(page["id"], coords[0], coords[1], river_name, sensitivity,
                  usgs_sites, noaa_gauges, db_path)
         saved = get_page_by_edit_token(edit_token, db_path)
