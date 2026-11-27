@@ -34,10 +34,7 @@ def _make_app(tmp_db, monkeypatch, trusted_proxies=None):
     else:
         monkeypatch.setenv("TRUSTED_PROXY_COUNT", str(trusted_proxies))
     init_db(tmp_db)
-    routes_mod.PIN_CREATE_LIMITER.reset()
-    routes_mod.DISCOVER_TOKEN_LIMITER.reset()
-    routes_mod.DISCOVER_IP_LIMITER.reset()
-    routes_mod.PIN_SAVE_LIMITER.reset()
+    routes_mod.reset_limiters()
     from web.app import create_app
     app = create_app(db_path=tmp_db, notification_queue=queue.Queue())
     app.config["TESTING"] = True
@@ -82,20 +79,23 @@ def test_oversized_post_gets_413_even_when_route_never_reads_body(client):
 
 
 def test_body_under_limit_is_accepted(client):
-    resp = client.post("/pages/new", data={"page_name": "Ohio", "pad": "x" * 1000})
+    resp = client.post("/pages/new", data={"page_name": "Ohio", "pad": "x" * 1000},
+                       headers={"Authorization": ADMIN_AUTH})
     assert resp.status_code == 200
 
 
 # --- page name --------------------------------------------------------------
 
 def test_page_name_over_100_chars_gets_400(client):
-    resp = client.post("/pages/new", data={"page_name": "x" * 101})
+    resp = client.post("/pages/new", data={"page_name": "x" * 101},
+                       headers={"Authorization": ADMIN_AUTH})
     assert resp.status_code == 400
     assert "100 characters" in resp.data.decode()
 
 
 def test_page_name_of_100_chars_after_trim_is_accepted(client):
-    resp = client.post("/pages/new", data={"page_name": "   " + "x" * 100 + "   "})
+    resp = client.post("/pages/new", data={"page_name": "   " + "x" * 100 + "   "},
+                       headers={"Authorization": ADMIN_AUTH})
     assert resp.status_code == 200
 
 
@@ -218,7 +218,8 @@ def test_every_third_party_asset_has_matching_integrity_and_crossorigin():
 
 def _session_cookie_header(app):
     with app.test_client() as c:
-        resp = c.post("/pages/new", data={"page_name": ""})   # flashes -> session
+        resp = c.post("/pages/new", data={"page_name": ""},   # flashes -> session
+                      headers={"Authorization": ADMIN_AUTH})
     cookies = [h for h in resp.headers.getlist("Set-Cookie") if h.startswith("session=")]
     assert cookies, "expected a session cookie"
     return cookies[0]
