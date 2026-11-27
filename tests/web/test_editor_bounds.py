@@ -186,6 +186,63 @@ def test_add_just_under_cap_succeeds(client, tmp_db, page):
     assert "LAST1" in [g["lid"] for g in get_page_gauges(page["id"], tmp_db)]
 
 
+def _total_links(tmp_db):
+    return _count(tmp_db, "page_noaa_gauges") + _count(tmp_db, "page_sites")
+
+
+def test_readding_a_linked_gauge_on_a_full_page_is_a_noop_success(client, tmp_db, page):
+    _fill_page(tmp_db, page, routes_mod.MAX_SOURCES_PER_PAGE)     # CAP1 is a gauge
+    with patch("web.routes.fetch_gauge_metadata", side_effect=lambda i, timeout=10: _meta("CAP1")):
+        resp = client.post(f"/edit/{page['edit_token']}/gauges/add",
+                           data={"lid": "CAP1"}, follow_redirects=True)
+    body = resp.data.decode()
+    assert "maximum of" not in body
+    assert "already" in body
+    assert _total_links(tmp_db) == routes_mod.MAX_SOURCES_PER_PAGE
+
+
+def test_readding_a_linked_site_on_a_full_page_is_a_noop_success(client, tmp_db, page):
+    _fill_page(tmp_db, page, routes_mod.MAX_SOURCES_PER_PAGE)     # 90000000 is a site
+    with patch("web.routes.validate_usgs_site", return_value=(True, "Cap", "")):
+        resp = client.post(f"/edit/{page['edit_token']}/sites/add",
+                           data={"site_number": "90000000"}, follow_redirects=True)
+    body = resp.data.decode()
+    assert "maximum of" not in body
+    assert "already" in body
+    assert _total_links(tmp_db) == routes_mod.MAX_SOURCES_PER_PAGE
+
+
+@pytest.mark.parametrize("kind", ["gauge", "site"])
+def test_a_concurrent_add_cannot_push_a_page_past_the_cap(client, tmp_db, page, kind):
+    """The cap check and the insert are one atomic step.
+
+    Another writer holds the page and has linked the last free slot but not
+    yet committed; an add arriving meanwhile must see that slot taken.
+    """
+    import threading
+    _fill_page(tmp_db, page, routes_mod.MAX_SOURCES_PER_PAGE - 1)
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM user_pages WHERE id=%s FOR UPDATE", (page["id"],))
+    cur.execute("INSERT INTO noaa_gauges (lid, station_name) VALUES ('RACE1', 'R') RETURNING id")
+    cur.execute("INSERT INTO page_noaa_gauges (page_id, noaa_gauge_id) VALUES (%s, %s)",
+                (page["id"], cur.fetchone()["id"]))
+    other = client.application.test_client()
+    adder = (lambda: _add_gauge(other, page, "RACE2")) if kind == "gauge" else \
+            (lambda: _add_site(other, page, "03294500"))
+    thread = threading.Thread(target=adder)
+    try:
+        thread.start()
+        thread.join(1.5)        # give the add time to run (or block on the page)
+    finally:
+        conn.commit()
+        cur.close()
+        conn.close()
+        thread.join(15)
+    assert not thread.is_alive()
+    assert _total_links(tmp_db) == routes_mod.MAX_SOURCES_PER_PAGE
+
+
 # --- per-visitor rate limits ----------------------------------------------
 
 def test_editor_writes_are_throttled_per_visitor(client, tmp_db, page):
@@ -233,4 +290,5 @@ def test_gauge_search_is_throttled_per_visitor(client, page):
             assert client.get(url, environ_base=a).status_code == 200
         assert client.get(url, environ_base=a).status_code == 429
         assert client.get(url, environ_base={"REMOTE_ADDR": "198.51.100.5"}).status_code == 200
+
 

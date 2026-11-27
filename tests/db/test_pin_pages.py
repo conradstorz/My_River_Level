@@ -193,6 +193,17 @@ def test_save_pin_never_reenables_admin_sources_switched_off(tmp_db):
     assert len(get_page_sites(page["id"], tmp_db)) == 1      # still linked
 
 
+def test_save_pin_enforces_the_source_cap_in_its_transaction(tmp_db):
+    from db.models import MAX_SOURCES_PER_PAGE
+    page = create_pin_page(7, tmp_db)
+    save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)
+    too_many = [{"site_number": f"9{i:07d}", "station_name": "S", "parameter_code": "00065"}
+                for i in range(MAX_SOURCES_PER_PAGE + 1)]
+    with pytest.raises(ValueError):
+        save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", too_many, [], tmp_db)
+    assert [s["site_number"] for s in get_page_sites(page["id"], tmp_db)] == ["03294500"]
+
+
 def test_save_pin_stays_pending_without_owner(tmp_db):
     page = create_pin_page(None, tmp_db)
     save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)

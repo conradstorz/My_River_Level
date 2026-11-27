@@ -23,7 +23,10 @@ from flask import (render_template, current_app, request, redirect, url_for,
 from twilio.request_validator import RequestValidator
 from db.models import (get_db, get_setting, set_setting, get_sites_with_health,
                        create_pin_page, get_page_by_edit_token, save_pin,
-                       PAGE_SUBSCRIBER_STATUSES, SENSITIVITY_LEVELS)
+                       add_page_gauge, add_page_site, page_links_source,
+                       page_source_count, MAX_SOURCES_PER_PAGE,
+                       PAGE_SUBSCRIBER_STATUSES, SENSITIVITY_LEVELS,
+                       SOURCE_ADDED, SOURCE_ALREADY_LINKED)
 from version import VERSION, RELEASE_DATE
 from monitor.site_validation import validate_usgs_site
 from monitor.site_search import search_sites_by_name
@@ -78,11 +81,8 @@ DISCOVER_CONCURRENCY = ConcurrencyLimiter(max_in_flight=2)
 EDITOR_WRITE_VISITOR_LIMITER = RateLimiter(limit=60, per_seconds=3600)
 GAUGE_SEARCH_VISITOR_LIMITER = RateLimiter(limit=30, per_seconds=3600)
 
-#: The most USGS sites + NOAA gauges one Page may reference. Enforced on pin
-#: save (which replaces a Page's sources) and on public Page editor adds; it
-#: bounds both the save-time verification fan-out and what one Page can make
-#: the pollers fetch.
-MAX_SOURCES_PER_PAGE = 20
+# MAX_SOURCES_PER_PAGE (imported from db.models) bounds pin saves and editor
+# adds; db.models enforces it atomically with the insert.
 
 
 def reset_limiters():
@@ -163,28 +163,23 @@ TOO_MANY_SEARCHES = ("Too many searches from your connection; please wait a whil
                      "and try again.\n", 429)
 
 
-def _page_source_count(page_id, db_path):
-    """USGS sites + NOAA gauges currently linked to a page."""
-    conn = get_db(db_path)
-    cur = conn.cursor()
-    try:
-        cur.execute(
-            """SELECT (SELECT COUNT(*) FROM page_sites WHERE page_id=%s)
-                    + (SELECT COUNT(*) FROM page_noaa_gauges WHERE page_id=%s) AS n""",
-            (page_id, page_id)
-        )
-        return cur.fetchone()["n"]
-    finally:
-        cur.close()
-        conn.close()
-
-
-def _page_full(page_id, db_path):
-    """True (after flashing why) when the page is at MAX_SOURCES_PER_PAGE."""
-    if _page_source_count(page_id, db_path) < MAX_SOURCES_PER_PAGE:
-        return False
+def _flash_page_full():
     flash(f"This page already follows the maximum of {MAX_SOURCES_PER_PAGE} gauges. "
           "Remove one before adding another.", "danger")
+
+
+def _refuse_when_full(page_id, kind, identifier, db_path):
+    """Cheap pre-check before any upstream lookup; True (after flashing) to refuse.
+
+    A source the page already links is let through, so re-adding it on a
+    full page is a harmless no-op. The authoritative check is the atomic one
+    in ``db.models.add_page_site`` / ``add_page_gauge``.
+    """
+    if page_source_count(page_id, db_path) < MAX_SOURCES_PER_PAGE:
+        return False
+    if page_links_source(page_id, kind, identifier, db_path):
+        return False
+    _flash_page_full()
     return True
 
 
@@ -928,7 +923,6 @@ def register_routes(app):
         has MAX_SOURCES_PER_PAGE sources; 429 past the per-visitor write limit.
         """
         from flask import abort
-        from db.models import get_page_by_edit_token, get_or_create_noaa_gauge, link_page_gauge
         db_path = current_app.config["DB_PATH"]
         if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
             return TOO_MANY_EDITS
@@ -940,7 +934,7 @@ def register_routes(app):
         if not identifier:
             flash("Gauge ID is required.", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
-        if _page_full(page["id"], db_path):
+        if _refuse_when_full(page["id"], "noaa", identifier, db_path):
             return redirect(url_for("page_edit", edit_token=edit_token))
 
         meta = fetch_gauge_metadata(identifier)
@@ -948,14 +942,13 @@ def register_routes(app):
             flash(f"Gauge '{identifier}' not found in the NOAA database.", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
 
-        gauge_id = get_or_create_noaa_gauge(
-            meta["lid"], meta["station_name"],
-            meta["action_stage"], meta["minor_flood_stage"],
-            meta["moderate_flood_stage"], meta["major_flood_stage"],
-            db_path, origin="user",
-        )
-        link_page_gauge(page["id"], gauge_id, db_path)
-        flash(f"Gauge {meta['station_name']} added.", "success")
+        outcome = add_page_gauge(page["id"], meta, MAX_SOURCES_PER_PAGE, db_path)
+        if outcome == SOURCE_ADDED:
+            flash(f"Gauge {meta['station_name']} added.", "success")
+        elif outcome == SOURCE_ALREADY_LINKED:
+            flash(f"Gauge {meta['station_name']} is already on this page.", "info")
+        else:
+            _flash_page_full()
         return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/edit/<edit_token>/gauges/search", methods=["GET"])
@@ -1035,7 +1028,6 @@ def register_routes(app):
         MAX_SOURCES_PER_PAGE sources; 429 past the per-visitor write limit.
         """
         from flask import abort
-        from db.models import get_page_by_edit_token, link_page_site
         db_path = current_app.config["DB_PATH"]
         if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
             return TOO_MANY_EDITS
@@ -1048,7 +1040,7 @@ def register_routes(app):
         if not site_number:
             flash("USGS site number is required.", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
-        if _page_full(page["id"], db_path):
+        if _refuse_when_full(page["id"], "usgs", site_number, db_path):
             return redirect(url_for("page_edit", edit_token=edit_token))
 
         is_valid, usgs_name, error = validate_usgs_site(site_number, param_code)
@@ -1056,28 +1048,14 @@ def register_routes(app):
             flash(f"Invalid site number: {error}", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
 
-        conn = get_db(db_path)
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                """INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
-                   VALUES (%s, %s, %s, 'user', 1)
-                   ON CONFLICT (site_number) DO UPDATE SET active = CASE
-                       WHEN sites.origin = 'user' THEN 1 ELSE sites.active END
-                   RETURNING id""",
-                (site_number, usgs_name, param_code)
-            )
-            row = cur.fetchone()
-            conn.commit()
-        finally:
-            cur.close()
-            conn.close()
-        if row is None:
-            flash(f"Could not add site {site_number}.", "danger")
-            return redirect(url_for("page_edit", edit_token=edit_token))
-
-        link_page_site(page["id"], row["id"], db_path)
-        flash(f"River gauge {usgs_name or site_number} added to this page.", "success")
+        outcome = add_page_site(page["id"], site_number, usgs_name, param_code,
+                                MAX_SOURCES_PER_PAGE, db_path)
+        if outcome == SOURCE_ADDED:
+            flash(f"River gauge {usgs_name or site_number} added to this page.", "success")
+        elif outcome == SOURCE_ALREADY_LINKED:
+            flash(f"River gauge {usgs_name or site_number} is already on this page.", "info")
+        else:
+            _flash_page_full()
         return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/edit/<edit_token>/sites/remove", methods=["POST"])

@@ -169,7 +169,7 @@ live page references them (a page is live when `active`, `paused`, or still
 after 7 days). Public page-editor adds (`/edit/<t>/gauges/add`, `/edit/<t>/sites/add`)
 also provision new sources as `origin='user'` (an existing source keeps its
 origin; only a `user`-origin row is ever reactivated, never an admin one the
-maintainer switched off), are capped at `web.routes.MAX_SOURCES_PER_PAGE` per page, and are
+maintainer switched off), are capped at `db.models.MAX_SOURCES_PER_PAGE` per page (checked under the page's row lock), and are
 rate limited per visitor. Each page has a `sensitivity` dial
 (`floods` / `unusual` / `all`) applied by the dispatcher through
 `monitor.scheduler.alert_allowed`, and a lifecycle `status`

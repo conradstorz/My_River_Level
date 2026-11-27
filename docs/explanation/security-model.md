@@ -69,13 +69,18 @@ have at most 2 discovery searches in flight, so a few slow searches cannot
 occupy every waitress thread, and each search pairs at most the nearest 10
 USGS sites with NOAA gauges. A save may choose at most
 `MAX_SOURCES_PER_PAGE` (20) sources, checked before any of them is verified.
+Every writer of a page's source links — a pin save, an editor add — holds
+that page's row lock (`SELECT ... FOR UPDATE`) for its whole transaction, so
+the cap check and the insert are one step and two concurrent adds cannot
+push a page past the cap.
 The pin routes serve only Pin pages — bound to a Telegram chat, or still
 `pending` — so an admin-created page's token cannot be driven through them.
 The page editor (`/edit/<edit_token>`) is bounded the same way: every write
 shares a budget of 60 per IP per hour and the NOAA name search allows 30 per
 IP per hour (429 beyond, and keyed by visitor, so minting more pages does not
 reset them); an add is refused with a flash once the page already has
-`MAX_SOURCES_PER_PAGE` sources, before the gauge is looked up upstream; and a
+`MAX_SOURCES_PER_PAGE` sources, before the gauge is looked up upstream (a
+source the page already has is a harmless no-op instead); and a
 source the editor adds for the first time is `user`-origin, so it retires
 once no live page references it.
 An IPv6 visitor is keyed by its /64 (`client_key`), since one subscriber

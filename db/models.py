@@ -451,8 +451,152 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
     return dict(updated)
 
 
+#: The most USGS sites + NOAA gauges one Page may reference. Enforced on pin
+#: save (which replaces a Page's sources) and on public Page editor adds; it
+#: bounds both the save-time verification fan-out and what one Page can make
+#: the pollers fetch.
+MAX_SOURCES_PER_PAGE = 20
+
+# Provision a source for a public path: new rows are origin='user'; an
+# existing row keeps its origin and only a retired user row is reactivated.
+_UPSERT_USER_SITE = """
+    INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
+    VALUES (%s, %s, %s, 'user', 1)
+    ON CONFLICT (site_number) DO UPDATE SET active = CASE
+        WHEN sites.origin = 'user' THEN 1 ELSE sites.active END
+    RETURNING id"""
+_UPSERT_USER_GAUGE = """
+    INSERT INTO noaa_gauges
+        (lid, station_name, action_stage, minor_flood_stage,
+         moderate_flood_stage, major_flood_stage, origin, active)
+    VALUES (%s, %s, %s, %s, %s, %s, 'user', 1)
+    ON CONFLICT (lid) DO UPDATE SET active = CASE
+        WHEN noaa_gauges.origin = 'user' THEN 1 ELSE noaa_gauges.active END
+    RETURNING id"""
+
+
+def _gauge_params(gauge):
+    return (gauge["lid"], gauge.get("station_name", ""),
+            gauge.get("action_stage"), gauge.get("minor_flood_stage"),
+            gauge.get("moderate_flood_stage"), gauge.get("major_flood_stage"))
+
+
+def _lock_page(cur, page_id):
+    """Row-lock the page until the transaction ends; False if it does not exist.
+
+    Every writer that changes a page's source links takes this lock first,
+    so a cap check and the insert it guards cannot interleave with another
+    writer's.
+    """
+    cur.execute("SELECT id FROM user_pages WHERE id=%s FOR UPDATE", (page_id,))
+    return cur.fetchone() is not None
+
+
+def _linked_source_count(cur, page_id):
+    cur.execute(
+        """SELECT (SELECT COUNT(*) FROM page_sites WHERE page_id=%s)
+                + (SELECT COUNT(*) FROM page_noaa_gauges WHERE page_id=%s) AS n""",
+        (page_id, page_id)
+    )
+    return cur.fetchone()["n"]
+
+
+def page_source_count(page_id, db_path=None):
+    """USGS sites + NOAA gauges currently linked to a page."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        return _linked_source_count(cur, page_id)
+    finally:
+        cur.close()
+        conn.close()
+
+
+# Does a page already link this source? Keyed by kind ("usgs" site number,
+# "noaa" LID, matched case-insensitively).
+_LINKED_SQL = {
+    "usgs": """SELECT 1 FROM page_sites ps JOIN sites s ON s.id = ps.site_id
+               WHERE ps.page_id=%s AND s.site_number=%s""",
+    "noaa": """SELECT 1 FROM page_noaa_gauges png
+               JOIN noaa_gauges g ON g.id = png.noaa_gauge_id
+               WHERE png.page_id=%s AND UPPER(g.lid)=UPPER(%s)""",
+}
+
+
+def page_links_source(page_id, kind, identifier, db_path=None):
+    """True when the page already links the USGS site number / NOAA LID."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(_LINKED_SQL[kind], (page_id, identifier))
+        return cur.fetchone() is not None
+    finally:
+        cur.close()
+        conn.close()
+
+
+SOURCE_ADDED = "added"
+SOURCE_ALREADY_LINKED = "already_linked"
+SOURCE_PAGE_FULL = "page_full"
+
+
+def _add_page_source(page_id, kind, params, max_sources, db_path):
+    if kind == "usgs":
+        upsert = _UPSERT_USER_SITE
+        link = """INSERT INTO page_sites (page_id, site_id) VALUES (%s, %s)
+                  ON CONFLICT DO NOTHING"""
+    else:
+        upsert = _UPSERT_USER_GAUGE
+        link = """INSERT INTO page_noaa_gauges (page_id, noaa_gauge_id) VALUES (%s, %s)
+                  ON CONFLICT DO NOTHING"""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        if not _lock_page(cur, page_id):
+            raise ValueError(f"unknown page {page_id}")
+        cur.execute(_LINKED_SQL[kind], (page_id, params[0]))
+        if cur.fetchone() is not None:
+            conn.rollback()
+            return SOURCE_ALREADY_LINKED
+        if _linked_source_count(cur, page_id) >= max_sources:
+            conn.rollback()
+            return SOURCE_PAGE_FULL
+        cur.execute(upsert, params)
+        cur.execute(link, (page_id, cur.fetchone()["id"]))
+        conn.commit()
+        return SOURCE_ADDED
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def add_page_site(page_id, site_number, station_name, parameter_code,
+                  max_sources=MAX_SOURCES_PER_PAGE, db_path=None):
+    """Provision a USGS site for a public editor add and link it, under the cap.
+
+    One transaction holding the page's row lock: the cap check and the
+    insert cannot race another writer. Returns SOURCE_ALREADY_LINKED (nothing
+    changes; a re-add on a full page is not refused), SOURCE_PAGE_FULL
+    (nothing is written), or SOURCE_ADDED. A new site is origin='user'; see
+    _UPSERT_USER_SITE for how an existing row is treated.
+    """
+    return _add_page_source(page_id, "usgs", (site_number, station_name, parameter_code),
+                            max_sources, db_path)
+
+
+def add_page_gauge(page_id, gauge, max_sources=MAX_SOURCES_PER_PAGE, db_path=None):
+    """Provision a NOAA gauge (a metadata dict) for a public editor add and link it.
+
+    Same transaction, cap and return values as `add_page_site`.
+    """
+    return _add_page_source(page_id, "noaa", _gauge_params(gauge), max_sources, db_path)
+
+
 def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges,
-             db_path=None):
+             db_path=None, max_sources=MAX_SOURCES_PER_PAGE):
     """Store a page's pin and replace its sources, provisioning any new ones.
 
     Everything happens in one transaction so a failure part-way leaves the
@@ -461,12 +605,18 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
     the retirement sweep switched off comes back the moment someone selects
     it again; an admin row's active flag is never touched, so a source the
     maintainer switched off stays off.
+
+    The transaction holds the page's row lock, like the editor adds, and
+    raises ValueError (changing nothing) for more than `max_sources` sources.
     """
     if sensitivity not in SENSITIVITY_LEVELS:
         raise ValueError(f"unknown sensitivity {sensitivity!r}")
+    if len(usgs_sites) + len(noaa_gauges) > max_sources:
+        raise ValueError(f"a page can follow at most {max_sources} sources")
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
+        _lock_page(cur, page_id)
         cur.execute(
             """UPDATE user_pages
                SET pin_lat=%s, pin_lon=%s, river_name=%s, sensitivity=%s,
@@ -479,11 +629,7 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
         cur.execute("DELETE FROM page_noaa_gauges WHERE page_id=%s", (page_id,))
         for site in usgs_sites:
             cur.execute(
-                """INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
-                   VALUES (%s, %s, %s, 'user', 1)
-                   ON CONFLICT (site_number) DO UPDATE SET active = CASE
-                       WHEN sites.origin = 'user' THEN 1 ELSE sites.active END
-                   RETURNING id""",
+                _UPSERT_USER_SITE,
                 (site["site_number"], site.get("station_name", ""),
                  site.get("parameter_code", "00065"))
             )
@@ -493,18 +639,7 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
                 (page_id, site_id)
             )
         for gauge in noaa_gauges:
-            cur.execute(
-                """INSERT INTO noaa_gauges
-                   (lid, station_name, action_stage, minor_flood_stage,
-                    moderate_flood_stage, major_flood_stage, origin, active)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'user', 1)
-                   ON CONFLICT (lid) DO UPDATE SET active = CASE
-                       WHEN noaa_gauges.origin = 'user' THEN 1 ELSE noaa_gauges.active END
-                   RETURNING id""",
-                (gauge["lid"], gauge.get("station_name", ""),
-                 gauge.get("action_stage"), gauge.get("minor_flood_stage"),
-                 gauge.get("moderate_flood_stage"), gauge.get("major_flood_stage"))
-            )
+            cur.execute(_UPSERT_USER_GAUGE, _gauge_params(gauge))
             gauge_id = cur.fetchone()["id"]
             cur.execute(
                 """INSERT INTO page_noaa_gauges (page_id, noaa_gauge_id)
