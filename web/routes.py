@@ -35,6 +35,7 @@ from monitor.search_cache import get_or_compute
 from monitor.noaa_search import search_noaa_gauges_by_name
 from monitor.gauge_quality import split_quality_detail
 from monitor.pin_discovery import discover
+from web.auth import is_admin_request
 from web.ratelimit import ConcurrencyLimiter, RateLimiter, client_key
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,10 @@ def reset_limiters():
         if isinstance(value, (RateLimiter, ConcurrencyLimiter)):
             value.reset()
 
+# The values the page_subscribers.status CHECK constraint allows; the public
+# unsubscribe route accepts nothing else.
+PAGE_SUBSCRIBER_STATUSES = ("active", "paused", "unsubscribed")
+
 SENSITIVITY_LABELS = [
     ("floods", "Floods only",
      "NOAA flood-category changes and severe highs"),
@@ -116,6 +121,26 @@ def _parse_coordinates(payload):
     if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
         return None
     return lat, lon
+
+
+MAX_NAME_LENGTH = 100
+
+
+def _clean_name(value, label):
+    """Validate a visitor-supplied page/river name.
+
+    Returns ``(name, error)``: ``name`` is the trimmed string, or None when
+    the value is missing or blank; ``error`` is a message when the value is
+    not a string or is longer than MAX_NAME_LENGTH after trimming.
+    """
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        return None, f"{label} must be text."
+    value = value.strip()
+    if len(value) > MAX_NAME_LENGTH:
+        return None, f"{label} must be at most {MAX_NAME_LENGTH} characters."
+    return value or None, None
 
 
 def visitor_key():
@@ -657,13 +682,16 @@ def register_routes(app):
 
     @app.route("/pages/new", methods=["GET", "POST"])
     def page_new():
-        """GET|POST /pages/new — create a public landing page.
+        """GET|POST /pages/new — create a public landing page (maintainer only).
 
         POST requires a page name, creates the page, and renders the created
         page with its public and edit tokens; GET renders the creation form.
         """
         if request.method == "POST":
-            page_name = request.form.get("page_name", "").strip()
+            page_name, error = _clean_name(request.form.get("page_name"), "Page name")
+            if error:
+                flash(error, "danger")
+                return render_template("page_new.html"), 400
             if not page_name:
                 flash("Page name is required.", "danger")
                 return render_template("page_new.html")
@@ -756,6 +784,9 @@ def register_routes(app):
             return jsonify({"error": (
                 f"Too many sources: a page can follow at most {MAX_SOURCES_PER_PAGE} "
                 f"gauges (you chose {len(sources)}). Untick some and save again.")}), 400
+        river_name, error = _clean_name(payload.get("river_name"), "River name")
+        if error:
+            return jsonify({"error": error}), 400
 
         usgs_sites, noaa_gauges, skipped = [], [], []
         for src in sources:
@@ -788,7 +819,6 @@ def register_routes(app):
             return jsonify({"error": "None of the chosen sources could be verified.",
                             "skipped": skipped}), 400
 
-        river_name = (payload.get("river_name") or "").strip() or None
         save_pin(page["id"], coords[0], coords[1], river_name, sensitivity,
                  usgs_sites, noaa_gauges, db_path)
         saved = get_page_by_edit_token(edit_token, db_path)
@@ -843,7 +873,8 @@ def register_routes(app):
         sites = get_page_sites(page["id"], db_path)
         return render_template("page_edit.html", page=page, gauges=gauges,
                                subscribers=subscribers, sites=sites,
-                               edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS)
+                               edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS,
+                               can_subscribe=is_admin_request())
 
     @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
     def page_add_gauge(edit_token):
@@ -922,7 +953,8 @@ def register_routes(app):
             "page_edit.html", page=page, gauges=gauges, subscribers=subscribers,
             sites=sites, edit_token=edit_token, gauge_matches=gauge_matches,
             gauge_query=query, gauge_page=pageno, gauge_pages=pages,
-            gauge_total=total, sensitivity_options=SENSITIVITY_LABELS)
+            gauge_total=total, sensitivity_options=SENSITIVITY_LABELS,
+            can_subscribe=is_admin_request())
 
     @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
     def page_remove_gauge(edit_token):
@@ -1013,9 +1045,10 @@ def register_routes(app):
     def page_subscribe(edit_token):
         """POST /edit/<edit_token>/subscribe — subscribe a recipient to the page's alerts.
 
-        Requires ``channel`` and ``channel_id`` (SMS/WhatsApp normalized to
-        E.164); adds the page subscriber and redirects to the editor. 404s on an
-        unknown token.
+        Maintainer only (Basic auth): an edit token must never let its holder
+        point alerts at someone else's chat or phone. Requires ``channel`` and
+        ``channel_id`` (SMS/WhatsApp normalized to E.164); adds the page
+        subscriber and redirects to the editor. 404s on an unknown token.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, add_page_subscriber
@@ -1040,7 +1073,8 @@ def register_routes(app):
         """POST /edit/<edit_token>/unsubscribe — change a page subscriber's status.
 
         Requires ``channel`` and ``channel_id``; sets the status (default
-        ``unsubscribed``) and redirects to the editor. 404s on an unknown token.
+        ``unsubscribed``; anything outside ``PAGE_SUBSCRIBER_STATUSES`` is a
+        400) and redirects to the editor. 404s on an unknown token.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, set_page_subscriber_status
@@ -1051,6 +1085,8 @@ def register_routes(app):
         channel = request.form.get("channel", "").strip()
         channel_id = request.form.get("channel_id", "").strip()
         new_status = request.form.get("status", "unsubscribed")
+        if new_status not in PAGE_SUBSCRIBER_STATUSES:
+            return "Unknown subscriber status.\n", 400
         if channel and channel_id:
             set_page_subscriber_status(page["id"], channel, channel_id, new_status, db_path)
             flash(f"Status updated to {new_status}.", "success")

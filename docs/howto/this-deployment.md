@@ -218,9 +218,14 @@ lists the stages without doing anything.
 The tunnel's ingress rules live in the Cloudflare dashboard, not in either
 repo; the `cloudflare-tunnel` README records them. One rule for
 `river.ohr3023.org` admits only `/pin`, `/pin/...`, `/view/...`, `/edit/...`,
-`/pages/new`, `/static/...` and `/healthz`; a catch-all returns 404. The
-admin portal and the channel webhooks (`/webhook/...`) therefore stay
-tailnet-only.
+`/static/...` and `/healthz`, with the path regex
+
+```
+^/(pin(/.*)?|view/.+|edit/.+|static/.+|healthz)$
+```
+
+and a catch-all returns 404. The admin portal, page creation (`/pages/new`)
+and the channel webhooks (`/webhook/...`) therefore stay tailnet-only.
 
 1. Create the shared network once on `<docker-host>`, before starting either
    project.
@@ -249,13 +254,29 @@ tailnet-only.
    ```bash
    python scripts/smoke_public_edge.py --view-token <public_token>
    ```
-   Expected: six `PASS` lines (200 from `/healthz`, `/pin` and
-   `/view/<public_token>`; 404 from `/`, `/settings` and `/webhook/twilio`)
+   Expected: seven `PASS` lines (200 from `/healthz`, `/pin` and
+   `/view/<public_token>`; 404 from `/`, `/settings`, `/webhook/twilio` and
+   `/pages/new`)
    and exit status 0; the token is printed only as its first three
    characters. Take `<public_token>` from any live page. Each run's
    `/pin` request creates one pending page, swept after 7 days. Against
    `--base-url https://<portal-host>` the 404 checks fail by design (the
    tailnet serves everything), but `/healthz` should show 200.
+
+### Cloudflare edge settings
+
+Set these once in the Cloudflare dashboard for `ohr3023.org`; the app does
+not set them itself (HSTS in particular belongs at the edge, which is the
+only hop that speaks HTTPS):
+
+- [ ] **Always Use HTTPS** on (SSL/TLS → Edge Certificates), so a plain
+      `http://` link is redirected before it reaches the tunnel.
+- [ ] **HSTS** enabled (SSL/TLS → Edge Certificates → HTTP Strict Transport
+      Security), so browsers never retry the site over plain HTTP.
+- [ ] **Rate-limiting rule** (Security → WAF → Rate limiting rules) on
+      `river.ohr3023.org` requests whose path starts with `/pin` or `/edit/`,
+      blocking or challenging above a per-IP rate. This is the brake that
+      holds across app restarts; the app's own limits are in-process.
 
 ## Constraints of this setup
 

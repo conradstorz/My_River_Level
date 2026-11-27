@@ -343,13 +343,29 @@ def get_page_for_chat(chat_id, db_path=None):
     return dict(row) if row else None
 
 
+class ChatHasLivePage(Exception):
+    """Raised by `bind_page_to_chat` when the chat already has a different live page.
+
+    `page` is that existing page's row, left untouched.
+    """
+
+    def __init__(self, page):
+        super().__init__(f"chat already has live page {page['id']}")
+        self.page = page
+
+
 def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
     """Make `chat_id` the owner and an active subscriber of the page.
 
     Returns the updated row, or None when the token is unknown, the page is
     stopped, or another chat already owns it. A page that already has its
-    pin becomes active; one still waiting for a pin stays pending. Any other
-    page this chat owned is stopped, so a chat has at most one live page.
+    pin becomes active; one still waiting for a pin stays pending.
+
+    A chat has at most one live page. If the chat already owns a different
+    live page (active, paused, or pending with a pin saved) nothing changes
+    and `ChatHasLivePage` is raised: a deep link someone else sent must never
+    silently replace it. The chat switches deliberately with /stop first. A
+    pin-less pending page (an abandoned bare /start) is simply stopped.
     """
     chat_id = int(chat_id)
     conn = get_conn(db_path)
@@ -361,14 +377,25 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
             return None
         if page["owner_chat_id"] is not None and page["owner_chat_id"] != chat_id:
             return None
+        cur.execute(
+            """SELECT * FROM user_pages
+               WHERE owner_chat_id=%s AND id<>%s
+                 AND (status IN ('active', 'paused')
+                      OR (status='pending' AND pin_lat IS NOT NULL))
+               ORDER BY id DESC LIMIT 1""",
+            (chat_id, page["id"])
+        )
+        live = cur.fetchone()
+        if live is not None:
+            raise ChatHasLivePage(dict(live))
         # Only a pending page is promoted: re-binding a paused page (the
         # owner tapping the deep link again) must not silently undo the pause.
         if page["status"] == "pending" and page["pin_lat"] is not None:
             new_status = "active"
         else:
             new_status = page["status"]
-        # A chat owns at most one live page: binding a new one closes any
-        # other page this chat still had open, so its sources can retire.
+        # Anything else this chat still had open is a pin-less pending page;
+        # close it so the chat keeps exactly one page.
         cur.execute(
             """UPDATE user_pages SET status='stopped'
                WHERE owner_chat_id=%s AND id<>%s AND status<>'stopped'""",

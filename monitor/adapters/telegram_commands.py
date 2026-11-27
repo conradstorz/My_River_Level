@@ -12,6 +12,7 @@ import logging
 
 from db.models import (
     SENSITIVITY_LEVELS,
+    ChatHasLivePage,
     bind_page_to_chat,
     create_pin_page,
     get_page_for_chat,
@@ -69,7 +70,13 @@ def start_chat(chat_id, display_name, arg, db_path=None):
     """Handle /start [token]: bind a web-first page, or hand out the map link."""
     arg = (arg or "").strip()
     if arg:
-        page = bind_page_to_chat(arg, chat_id, display_name, db_path)
+        try:
+            page = bind_page_to_chat(arg, chat_id, display_name, db_path)
+        except ChatHasLivePage as exc:
+            river = exc.page["river_name"] or "your river"
+            return (f"This chat is already set up for {river}, so I left that "
+                    "page as it is. To switch to the page from this link, send "
+                    "/stop first, then tap the link again.")
         if page is None:
             return TOKEN_NOT_FOUND
         if page["status"] == "active":

@@ -22,11 +22,15 @@ The landing-page family works differently: `/view/<public_token>`,
 all, because their protection is the token itself — an unguessable UUID
 embedded in the URL. Anyone holding a `public_token` can view that page's
 gauges and their live conditions, nothing more. Anyone holding an
-`edit_token` can add or remove the page's gauges, change its subscribers, set
-its sensitivity, and drive the whole pin flow (map, discover, save) for that
+`edit_token` can add or remove the page's gauges, remove or pause its
+existing subscribers, set its sensitivity, and drive the whole pin flow (map, discover, save) for that
 one page — full control over that page's own sources and audience, but
-no route into any other page or the admin portal. Losing an edit link is
-equivalent to losing write access to that one page.
+no route into any other page or the admin portal. What an edit token cannot
+do is add a recipient: `POST /edit/<edit_token>/subscribe` requires Basic
+auth, and the editor shows its form only to the maintainer, so a stranger
+cannot point a page's alerts at someone else's Telegram chat or phone. Pin
+pages get their subscriber only from the Telegram `/start` binding. Losing
+an edit link is equivalent to losing write access to that one page.
 
 The two provider webhooks are authenticated by request signature instead of
 either mechanism above, in `web/routes.py`: an inbound Twilio request is checked against
@@ -38,6 +42,14 @@ secret. Both fail closed the same way the portal does — an unset
 call rather than accepting unsigned ones, since accepting them would let
 anyone impersonate a subscriber's `JOIN`/`STOP` command or a Messenger
 message.
+
+The Telegram `/start <edit_token>` deep link binds a page to whichever chat
+taps it, and the person who sent the link keeps its edit token. So a chat
+that already has a live pin page is never rebound by tapping a different
+page's link: the existing page stays live, the new page stays unbound, and
+the bot tells the user to send `/stop` first if they really mean to switch.
+Only a deliberate `/stop` from the chat itself releases its page (see
+[`telegram-commands.md`](../reference/telegram-commands.md)).
 
 The pin routes are the one place an anonymous visitor's click triggers real
 third-party API calls (NLDI, NWPS, USGS), so `web/ratelimit.py`'s
@@ -71,14 +83,32 @@ than through a server-rendered template, the page's own script escapes each
 field by hand before building markup from it. Neither path ever inserts a
 gauge name unescaped.
 
+## Baseline hygiene on every response
+
+`web/app.py` applies a few blanket rules no matter which guard a route uses.
+Request bodies over 64 KB are refused with 413 before the auth guard or the
+route sees them, since nothing legitimate is anywhere near that size and the
+pin routes are open to anonymous visitors. Visitor-supplied names (the page
+name on `/pages/new`, the river name on a pin save) must be text of at most
+100 characters, so a crafted JSON body gets a 400 rather than a 500 or an
+unbounded row. Every response, including error pages, carries
+`Referrer-Policy: no-referrer` (edit and view links are bearer tokens in the
+URL, so they must not leak to third-party hosts in a `Referer`),
+`X-Content-Type-Options: nosniff`, and both `X-Frame-Options: DENY` and
+`Content-Security-Policy: frame-ancestors 'none'` against clickjacking. Every
+Bootstrap and Leaflet tag loaded from a CDN carries an `integrity` hash and
+`crossorigin`, so a tampered CDN file is refused by the browser; bumping one
+of those pinned versions means recomputing its hash. The session cookie
+(used only for flash messages) is `SameSite=Lax`, and `Secure` whenever
+`TRUSTED_PROXY_COUNT` is above 0, i.e. behind the HTTPS edge.
+
 ## What is public by design
 
-Three routes need no credential, token, or signature at all, because they
+Two routes need no credential, token, or signature at all, because they
 are meant to be reachable by anyone: `GET /healthz` (the container
-healthcheck), `GET, POST /pages/new` (the admin-style page-creation form,
-open so anyone can start a landing page without portal credentials), and
-`GET /pin` (the web-first entry point that creates a pending page and
-redirects to its map). An anonymous visitor who reaches these can, within
+healthcheck) and `GET /pin` (the web-first entry point that creates a
+pending page and redirects to its map). Creating an admin page
+(`/pages/new`) is maintainer-only, and the public edge does not route it. An anonymous visitor who reaches these can, within
 the rate limits above: create a pending landing page; cause the service to
 make USGS and NOAA API calls on their behalf while discovering gauges near a
 pin; and provision USGS sites and NOAA gauges as `user`-origin sources tied
