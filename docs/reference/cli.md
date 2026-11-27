@@ -12,7 +12,7 @@ Commands an operator runs, all from the project directory.
 | `docker compose ps` | Show container status and health. | Health comes from the `healthcheck` in `docker-compose.yml`, which itself polls `/healthz`. |
 | `docker compose restart app` | Restart the app container without rebuilding. | Picks up a changed `.env` value, or recovers a container whose supervisor exited non-zero. |
 | `docker compose up -d --build` | Build the image and start (or update) the app in the background. | Requires the shared-postgres server already running (`docker compose up -d` in that project) and a completed `.env` — see [`environment.md`](environment.md). |
-| `python scripts/smoke_public_edge.py [--base-url <url>] [--view-token <public_token>]` | Smoke-check the public edge from the CLI machine. | Default base URL `https://river.ohr3023.org`. Expects 200 from `/healthz`, `/pin` and `/view/<public_token>` (skipped without `--view-token`), 404 from `/`, `/settings` and `/webhook/twilio`; prints one `PASS`/`FAIL` line per check (the view token shown only as its first three characters) and exits 1 on any mismatch. Standard library only. Each run's `/pin` request creates one pending page and counts against that route's rate limit. See [`../howto/this-deployment.md`](../howto/this-deployment.md#public-edge). |
+| `python scripts/smoke_public_edge.py [--base-url <url>] [--view-token <public_token>]` | Smoke-check the public edge from the CLI machine. | Default base URL `https://river.ohr3023.org`. Expects 200 from `/healthz`, `/pin` and `/view/<public_token>` (skipped without `--view-token`), 404 from `/`, `/settings`, `/webhook/twilio`, `/pages/new` and `/admin/pages`; prints one `PASS`/`FAIL` line per check (the view token shown only as its first three characters) and exits 1 on any mismatch. Standard library only. Each run's `/pin` request creates one pending page and counts against that route's rate limit. See [`../howto/this-deployment.md`](../howto/this-deployment.md#public-edge). |
 
 ## Deploy / upgrade
 
@@ -47,4 +47,4 @@ Commands an operator runs, all from the project directory.
 | `docker compose exec app python -c "from db.models import set_setting; set_setting('<key>', '<value>')"` | Change a settings-table value that has no portal field (the `rate_change_*` keys, `site_stale_hours`, `forecast_poll_hours`). | The reading thread picks it up on its next cycle; see [`settings.md`](settings.md) for the full key list. |
 | `docker compose exec app python -c "from db.models import get_db; c=get_db(); cur=c.cursor(); cur.execute('select id, page_name, owner_chat_id, status, edit_token from user_pages order by id'); [print(dict(r)) for r in cur.fetchall()]"` | List every page with its edit token, to open a user's editor on their behalf or answer who owns what. | See [`../howto/add-gauges-as-admin.md`](../howto/add-gauges-as-admin.md) for closing or inspecting a page. |
 
-Verified against commit 39c5272
+Verified against commit 07531ac

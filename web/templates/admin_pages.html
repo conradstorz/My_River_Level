@@ -15,6 +15,7 @@
       {{ p.page_name }}{% if p.river_name %} <span class="text-muted">— {{ p.river_name }}</span>{% endif %}<br>
       <small class="text-muted">
         <a href="{{ url_for('page_view', public_token=p.public_token) }}" target="_blank">View ↗</a>
+        · <a href="{{ url_for('admin_page_subscribers', page_id=p.id) }}">Subscribers</a>
       </small>
     </td>
     <td><small>{% if p.pin_lat is not none %}{{ "%.2f"|format(p.pin_lat) }}, {{ "%.2f"|format(p.pin_lon) }}{% else %}—{% endif %}</small></td>

@@ -23,7 +23,12 @@ Endpoints listed in :data:`PUBLIC_ENDPOINTS` are exempt. These are either
 unauthenticated by design (the container healthcheck, the provider webhooks,
 which are authenticated by signature instead) or authenticated by an
 unguessable token in the URL (the ``/view/<public_token>`` and
-``/edit/<edit_token>`` landing-page family).
+``/edit/<edit_token>`` landing-page family). Creating a page
+(``/pages/new``) and hand-adding or re-activating a page subscriber
+(``/admin/pages/<page_id>/subscribers/...``) are not public: an edit token
+lets its holder manage a page, never point alerts at someone else's chat or
+phone. Public endpoints never evaluate Basic auth, so a credential is only
+ever checked on a route the public edge does not expose.
 """
 
 import logging
@@ -41,7 +46,6 @@ PUBLIC_ENDPOINTS = frozenset({
     "webhook_twilio",
     "webhook_twilio_status",
     "webhook_facebook",
-    "page_new",
     "page_view",
     "page_edit",
     "page_add_gauge",
@@ -49,7 +53,6 @@ PUBLIC_ENDPOINTS = frozenset({
     "page_remove_gauge",
     "page_add_site",
     "page_remove_site",
-    "page_subscribe",
     "page_unsubscribe",
     "page_set_sensitivity",
     "pin_start",

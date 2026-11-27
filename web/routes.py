@@ -13,6 +13,7 @@ fail closed: an unconfigured secret rejects every request rather than
 accepting them all.
 """
 
+import functools
 import hashlib
 import hmac
 import json
@@ -23,7 +24,10 @@ from flask import (render_template, current_app, request, redirect, url_for,
 from twilio.request_validator import RequestValidator
 from db.models import (get_db, get_setting, set_setting, get_sites_with_health,
                        create_pin_page, get_page_by_edit_token, save_pin,
-                       SENSITIVITY_LEVELS)
+                       add_page_gauge, add_page_site, page_links_source,
+                       page_source_count, MAX_SOURCES_PER_PAGE,
+                       PAGE_SUBSCRIBER_STATUSES, SENSITIVITY_LEVELS,
+                       SOURCE_ADDED, SOURCE_ALREADY_LINKED)
 from version import VERSION, RELEASE_DATE
 from monitor.site_validation import validate_usgs_site
 from monitor.site_search import search_sites_by_name
@@ -35,7 +39,7 @@ from monitor.search_cache import get_or_compute
 from monitor.noaa_search import search_noaa_gauges_by_name
 from monitor.gauge_quality import split_quality_detail
 from monitor.pin_discovery import discover
-from web.ratelimit import RateLimiter
+from web.ratelimit import ConcurrencyLimiter, RateLimiter, client_key
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +71,42 @@ PIN_CREATE_LIMITER = RateLimiter(limit=10, per_seconds=86400)
 DISCOVER_TOKEN_LIMITER = RateLimiter(limit=20, per_seconds=3600)
 DISCOVER_IP_LIMITER = RateLimiter(limit=60, per_seconds=3600)
 PIN_SAVE_LIMITER = RateLimiter(limit=10, per_seconds=3600)
+# Keyed by visitor, not token: minting fresh pin pages must not reset it.
+PIN_SAVE_VISITOR_LIMITER = RateLimiter(limit=30, per_seconds=3600)
+# Each discovery holds a waitress thread for several upstream calls, so one
+# visitor may only have this many in flight at once.
+DISCOVER_CONCURRENCY = ConcurrencyLimiter(max_in_flight=2)
+# A pin save and an editor add verify sources against USGS/NOAA while holding
+# a waitress thread too, so they share their own per-visitor in-flight cap.
+SOURCE_WRITE_CONCURRENCY = ConcurrencyLimiter(max_in_flight=2)
+# The public Page editor is guarded only by its edit token, so its writes
+# (several of which verify against USGS/NOAA) and its NOAA gauge search are
+# throttled per visitor too.
+EDITOR_WRITE_VISITOR_LIMITER = RateLimiter(limit=60, per_seconds=3600)
+GAUGE_SEARCH_VISITOR_LIMITER = RateLimiter(limit=30, per_seconds=3600)
 
-# A pin page's sources come from a visitor-driven discovery search, not an
-# admin form, so the count needs an upper bound independent of what the map
-# UI happens to send.
-MAX_PIN_SOURCES = 30
+# MAX_SOURCES_PER_PAGE (imported from db.models) bounds pin saves and editor
+# adds; db.models enforces it atomically with the insert.
+
+
+#: Every limiter above; a new one must be added here so tests can reset it.
+LIMITERS = (
+    PIN_CREATE_LIMITER, DISCOVER_TOKEN_LIMITER, DISCOVER_IP_LIMITER,
+    PIN_SAVE_LIMITER, PIN_SAVE_VISITOR_LIMITER, DISCOVER_CONCURRENCY,
+    SOURCE_WRITE_CONCURRENCY, EDITOR_WRITE_VISITOR_LIMITER,
+    GAUGE_SEARCH_VISITOR_LIMITER,
+)
+
+
+def reset_limiters():
+    """Forget every hit and in-flight slot in LIMITERS (tests)."""
+    for limiter in LIMITERS:
+        limiter.reset()
+
+#: The subscriber statuses the public editor may set: only those that reduce
+#: delivery. Re-activating a subscriber (``active``) is maintainer-only, so an
+#: edit token cannot re-subscribe someone who left.
+PUBLIC_SUBSCRIBER_STATUSES = ("paused", "unsubscribed")
 
 SENSITIVITY_LABELS = [
     ("floods", "Floods only",
@@ -105,8 +140,82 @@ def _parse_coordinates(payload):
     return lat, lon
 
 
-def _client_ip():
-    return request.remote_addr or "unknown"
+MAX_NAME_LENGTH = 100
+
+
+def _clean_name(value, label):
+    """Validate a visitor-supplied page/river name.
+
+    Returns ``(name, error)``: ``name`` is the trimmed string, or None when
+    the value is missing or blank; ``error`` is a message when the value is
+    not a string or is longer than MAX_NAME_LENGTH after trimming.
+    """
+    if value is None:
+        return None, None
+    if not isinstance(value, str):
+        return None, f"{label} must be text."
+    value = value.strip()
+    if len(value) > MAX_NAME_LENGTH:
+        return None, f"{label} must be at most {MAX_NAME_LENGTH} characters."
+    return value or None, None
+
+
+def visitor_key():
+    """Rate-limit key for the current request's visitor.
+
+    Built on the ProxyFix-resolved ``remote_addr`` (see ``web/app.py``) and
+    folded by ``client_key`` so an IPv6 visitor is keyed by its /64.
+    """
+    return client_key(request.remote_addr or "unknown")
+
+
+TOO_MANY_EDITS = ("Too many changes from your connection; please wait a while "
+                  "and try again.\n", 429)
+TOO_MANY_IN_FLIGHT = ("Another change from your connection is still running; please "
+                      "wait for it to finish and try again.\n", 429)
+TOO_MANY_SEARCHES = ("Too many searches from your connection; please wait a while "
+                     "and try again.\n", 429)
+
+
+def _one_source_write_at_a_time(busy):
+    """Decorator: hold a SOURCE_WRITE_CONCURRENCY slot for the view's visitor.
+
+    When the visitor already has ``max_in_flight`` saves/adds running the
+    view is not entered and ``busy()`` (a 429) is returned. The slot is
+    released however the view ends, ``abort()`` included.
+    """
+    def wrap(view):
+        @functools.wraps(view)
+        def guarded(*args, **kwargs):
+            visitor = visitor_key()
+            if not SOURCE_WRITE_CONCURRENCY.acquire(visitor):
+                return busy()
+            try:
+                return view(*args, **kwargs)
+            finally:
+                SOURCE_WRITE_CONCURRENCY.release(visitor)
+        return guarded
+    return wrap
+
+
+def _flash_page_full():
+    flash(f"This page already follows the maximum of {MAX_SOURCES_PER_PAGE} gauges. "
+          "Remove one before adding another.", "danger")
+
+
+def _refuse_when_full(page_id, kind, identifier, db_path):
+    """Cheap pre-check before any upstream lookup; True (after flashing) to refuse.
+
+    A source the page already links is let through, so re-adding it on a
+    full page is a harmless no-op. The authoritative check is the atomic one
+    in ``db.models.add_page_site`` / ``add_page_gauge``.
+    """
+    if page_source_count(page_id, db_path) < MAX_SOURCES_PER_PAGE:
+        return False
+    if page_links_source(page_id, kind, identifier, db_path):
+        return False
+    _flash_page_full()
+    return True
 
 
 def _float_setting(key, default, db_path):
@@ -639,13 +748,16 @@ def register_routes(app):
 
     @app.route("/pages/new", methods=["GET", "POST"])
     def page_new():
-        """GET|POST /pages/new — create a public landing page.
+        """GET|POST /pages/new — create a public landing page (maintainer only).
 
         POST requires a page name, creates the page, and renders the created
         page with its public and edit tokens; GET renders the creation form.
         """
         if request.method == "POST":
-            page_name = request.form.get("page_name", "").strip()
+            page_name, error = _clean_name(request.form.get("page_name"), "Page name")
+            if error:
+                flash(error, "danger")
+                return render_template("page_new.html"), 400
             if not page_name:
                 flash("Page name is required.", "danger")
                 return render_template("page_new.html")
@@ -661,15 +773,23 @@ def register_routes(app):
     @app.route("/pin")
     def pin_start():
         """GET /pin — web-first entry: create a pending page and open its map."""
-        if not PIN_CREATE_LIMITER.allow(_client_ip()):
+        if not PIN_CREATE_LIMITER.allow(visitor_key()):
             return "Too many new pages from this address today.\n", 429
         db_path = current_app.config["DB_PATH"]
         page = create_pin_page(None, db_path)
         return redirect(url_for("pin_map", edit_token=page["edit_token"]))
 
     def _pin_page_or_abort(edit_token):
+        """Return the Pin page for `edit_token`, or abort.
+
+        Only Pin pages are served: bound to a Telegram chat, or still
+        `pending`. An admin-created Page's token is 404 here, whatever its
+        status, so the pin flow cannot be driven against it.
+        """
         page = get_page_by_edit_token(edit_token, current_app.config["DB_PATH"])
         if not page:
+            abort(404)
+        if page["owner_chat_id"] is None and page["status"] != "pending":
             abort(404)
         if page["status"] == "stopped":
             abort(410)
@@ -684,6 +804,7 @@ def register_routes(app):
             "pin.html", page=page, edit_token=edit_token,
             sensitivity_options=SENSITIVITY_LABELS,
             bot_link=bot_deep_link(edit_token, db_path),
+            max_sources=MAX_SOURCES_PER_PAGE,
         )
 
     @app.route("/pin/<edit_token>/discover", methods=["POST"])
@@ -691,23 +812,31 @@ def register_routes(app):
         """POST /pin/<edit_token>/discover — propose gauges for a lat/lon."""
         db_path = current_app.config["DB_PATH"]
         _pin_page_or_abort(edit_token)
-        if not DISCOVER_TOKEN_LIMITER.allow(edit_token) or not DISCOVER_IP_LIMITER.allow(_client_ip()):
+        visitor = visitor_key()
+        if not DISCOVER_TOKEN_LIMITER.allow(edit_token) or not DISCOVER_IP_LIMITER.allow(visitor):
             return jsonify({"error": "Too many searches; please wait a while."}), 429
-        coords = _parse_coordinates(request.get_json(silent=True))
-        if coords is None:
-            return jsonify({"error": "lat and lon must be valid coordinates."}), 400
-        reach_km = _float_setting("discovery_reach_km", 50.0, db_path)
-        radius = _float_setting("search_radius_miles", 25.0, db_path)
-        result = discover(coords[0], coords[1], reach_km=reach_km,
-                          fallback_radius_miles=radius)
-        return jsonify(result.to_dict())
+        if not DISCOVER_CONCURRENCY.acquire(visitor):
+            return jsonify({"error": "A search is already running; please wait for it."}), 429
+        try:
+            coords = _parse_coordinates(request.get_json(silent=True))
+            if coords is None:
+                return jsonify({"error": "lat and lon must be valid coordinates."}), 400
+            reach_km = _float_setting("discovery_reach_km", 50.0, db_path)
+            radius = _float_setting("search_radius_miles", 25.0, db_path)
+            result = discover(coords[0], coords[1], reach_km=reach_km,
+                              fallback_radius_miles=radius)
+            return jsonify(result.to_dict())
+        finally:
+            DISCOVER_CONCURRENCY.release(visitor)
 
     @app.route("/pin/<edit_token>/save", methods=["POST"])
+    @_one_source_write_at_a_time(lambda: (jsonify(
+        {"error": "A save is already running; please wait for it."}), 429))
     def pin_save(edit_token):
         """POST /pin/<edit_token>/save — store the pin and provision its sources."""
         db_path = current_app.config["DB_PATH"]
         page = _pin_page_or_abort(edit_token)
-        if not PIN_SAVE_LIMITER.allow(edit_token):
+        if not PIN_SAVE_LIMITER.allow(edit_token) or not PIN_SAVE_VISITOR_LIMITER.allow(visitor_key()):
             return jsonify({"error": "Too many saves; please wait a while."}), 429
         payload = request.get_json(silent=True) or {}
         coords = _parse_coordinates(payload)
@@ -719,8 +848,13 @@ def register_routes(app):
         sources = payload.get("sources") or []
         if not isinstance(sources, list) or not sources:
             return jsonify({"error": "Choose at least one source."}), 400
-        if len(sources) > MAX_PIN_SOURCES:
-            return jsonify({"error": "Too many sources; choose at most 30."}), 400
+        if len(sources) > MAX_SOURCES_PER_PAGE:
+            return jsonify({"error": (
+                f"Too many sources: a page can follow at most {MAX_SOURCES_PER_PAGE} "
+                f"gauges (you chose {len(sources)}). Untick some and save again.")}), 400
+        river_name, error = _clean_name(payload.get("river_name"), "River name")
+        if error:
+            return jsonify({"error": error}), 400
 
         usgs_sites, noaa_gauges, skipped = [], [], []
         for src in sources:
@@ -753,7 +887,6 @@ def register_routes(app):
             return jsonify({"error": "None of the chosen sources could be verified.",
                             "skipped": skipped}), 400
 
-        river_name = (payload.get("river_name") or "").strip() or None
         save_pin(page["id"], coords[0], coords[1], river_name, sensitivity,
                  usgs_sites, noaa_gauges, db_path)
         saved = get_page_by_edit_token(edit_token, db_path)
@@ -811,6 +944,7 @@ def register_routes(app):
                                edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS)
 
     @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
+    @_one_source_write_at_a_time(lambda: TOO_MANY_IN_FLIGHT)
     def page_add_gauge(edit_token):
         """POST /edit/<edit_token>/gauges/add — add a NOAA gauge to the page.
 
@@ -819,10 +953,19 @@ def register_routes(app):
         canonical LID, links it to the page, and redirects to the editor. Flashes
         an error and redirects if the token is unknown (404), the id is missing,
         or the gauge is not found.
+
+        A gauge new to the system is provisioned ``origin='user'`` so the
+        retirement sweep switches it off once no live Page references it; an
+        existing gauge keeps its origin. A retired user-origin gauge is
+        reactivated; an admin gauge the maintainer switched off stays off.
+        Refused (flash) when the page already has MAX_SOURCES_PER_PAGE
+        sources, unless the gauge is already on it (a no-op); 429 past the
+        per-visitor write limit or with another save/add in flight.
         """
         from flask import abort
-        from db.models import get_page_by_edit_token, get_or_create_noaa_gauge, link_page_gauge
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -831,20 +974,21 @@ def register_routes(app):
         if not identifier:
             flash("Gauge ID is required.", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
+        if _refuse_when_full(page["id"], "noaa", identifier, db_path):
+            return redirect(url_for("page_edit", edit_token=edit_token))
 
         meta = fetch_gauge_metadata(identifier)
         if not meta:
             flash(f"Gauge '{identifier}' not found in the NOAA database.", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
 
-        gauge_id = get_or_create_noaa_gauge(
-            meta["lid"], meta["station_name"],
-            meta["action_stage"], meta["minor_flood_stage"],
-            meta["moderate_flood_stage"], meta["major_flood_stage"],
-            db_path,
-        )
-        link_page_gauge(page["id"], gauge_id, db_path)
-        flash(f"Gauge {meta['station_name']} added.", "success")
+        outcome = add_page_gauge(page["id"], meta, MAX_SOURCES_PER_PAGE, db_path)
+        if outcome == SOURCE_ADDED:
+            flash(f"Gauge {meta['station_name']} added.", "success")
+        elif outcome == SOURCE_ALREADY_LINKED:
+            flash(f"Gauge {meta['station_name']} is already on this page.", "info")
+        else:
+            _flash_page_full()
         return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/edit/<edit_token>/gauges/search", methods=["GET"])
@@ -854,6 +998,8 @@ def register_routes(app):
         db_path = current_app.config["DB_PATH"]
         from db.models import (get_page_by_edit_token, get_page_gauges,
                                get_active_page_subscribers, get_page_sites)
+        if not GAUGE_SEARCH_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_SEARCHES
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -895,6 +1041,8 @@ def register_routes(app):
         from flask import abort
         from db.models import get_page_by_edit_token, unlink_page_gauge
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -905,6 +1053,7 @@ def register_routes(app):
         return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/edit/<edit_token>/sites/add", methods=["POST"])
+    @_one_source_write_at_a_time(lambda: TOO_MANY_IN_FLIGHT)
     def page_add_site(edit_token):
         """POST /edit/<edit_token>/sites/add — attach a USGS river gauge to the page.
 
@@ -913,10 +1062,18 @@ def register_routes(app):
         optional ``parameter_code``, validates the number against the USGS API,
         inserts the site if it is new, then links it to the page. 404s on an
         unknown edit token.
+
+        A new site is provisioned ``origin='user'`` (retired by the sweep once
+        unreferenced); an existing site keeps its origin. A retired user-origin
+        site is reactivated; an admin site the maintainer switched off stays
+        off. Refused (flash) when the page already has MAX_SOURCES_PER_PAGE
+        sources, unless the site is already on it (a no-op); 429 past the
+        per-visitor write limit or with another save/add in flight.
         """
         from flask import abort
-        from db.models import get_page_by_edit_token, link_page_site
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -926,33 +1083,22 @@ def register_routes(app):
         if not site_number:
             flash("USGS site number is required.", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
+        if _refuse_when_full(page["id"], "usgs", site_number, db_path):
+            return redirect(url_for("page_edit", edit_token=edit_token))
 
         is_valid, usgs_name, error = validate_usgs_site(site_number, param_code)
         if not is_valid:
             flash(f"Invalid site number: {error}", "danger")
             return redirect(url_for("page_edit", edit_token=edit_token))
 
-        conn = get_db(db_path)
-        cur = conn.cursor()
-        try:
-            cur.execute(
-                """INSERT INTO sites (site_number, station_name, parameter_code)
-                   VALUES (%s, %s, %s)
-                   ON CONFLICT (site_number) DO NOTHING""",
-                (site_number, usgs_name, param_code)
-            )
-            conn.commit()
-            cur.execute("SELECT id FROM sites WHERE site_number=%s", (site_number,))
-            row = cur.fetchone()
-        finally:
-            cur.close()
-            conn.close()
-        if row is None:
-            flash(f"Could not add site {site_number}.", "danger")
-            return redirect(url_for("page_edit", edit_token=edit_token))
-
-        link_page_site(page["id"], row["id"], db_path)
-        flash(f"River gauge {usgs_name or site_number} added to this page.", "success")
+        outcome = add_page_site(page["id"], site_number, usgs_name, param_code,
+                                MAX_SOURCES_PER_PAGE, db_path)
+        if outcome == SOURCE_ADDED:
+            flash(f"River gauge {usgs_name or site_number} added to this page.", "success")
+        elif outcome == SOURCE_ALREADY_LINKED:
+            flash(f"River gauge {usgs_name or site_number} is already on this page.", "info")
+        else:
+            _flash_page_full()
         return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/edit/<edit_token>/sites/remove", methods=["POST"])
@@ -965,6 +1111,8 @@ def register_routes(app):
         from flask import abort
         from db.models import get_page_by_edit_token, unlink_page_site
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -974,48 +1122,29 @@ def register_routes(app):
             flash("River gauge removed from this page.", "success")
         return redirect(url_for("page_edit", edit_token=edit_token))
 
-    @app.route("/edit/<edit_token>/subscribe", methods=["POST"])
-    def page_subscribe(edit_token):
-        """POST /edit/<edit_token>/subscribe — subscribe a recipient to the page's alerts.
-
-        Requires ``channel`` and ``channel_id`` (SMS/WhatsApp normalized to
-        E.164); adds the page subscriber and redirects to the editor. 404s on an
-        unknown token.
-        """
-        from flask import abort
-        from db.models import get_page_by_edit_token, add_page_subscriber
-        db_path = current_app.config["DB_PATH"]
-        page = get_page_by_edit_token(edit_token, db_path)
-        if not page:
-            abort(404)
-        channel = request.form.get("channel", "").strip()
-        channel_id = request.form.get("channel_id", "").strip()
-        display_name = request.form.get("display_name", "").strip()
-        if not channel or not channel_id:
-            flash("Channel and channel ID are required.", "danger")
-            return redirect(url_for("page_edit", edit_token=edit_token))
-        if channel in ("sms", "whatsapp"):
-            channel_id = normalize_e164(channel_id)
-        add_page_subscriber(page["id"], channel, channel_id, display_name, db_path)
-        flash("Subscribed to alerts for this page.", "success")
-        return redirect(url_for("page_edit", edit_token=edit_token))
-
     @app.route("/edit/<edit_token>/unsubscribe", methods=["POST"])
     def page_unsubscribe(edit_token):
-        """POST /edit/<edit_token>/unsubscribe — change a page subscriber's status.
+        """POST /edit/<edit_token>/unsubscribe — pause or remove a page subscriber.
 
         Requires ``channel`` and ``channel_id``; sets the status (default
-        ``unsubscribed``) and redirects to the editor. 404s on an unknown token.
+        ``unsubscribed``) and redirects to the editor. Only the statuses that
+        reduce delivery (``PUBLIC_SUBSCRIBER_STATUSES``) are accepted;
+        anything else, ``active`` included, is a 400, since re-activating a
+        subscriber is maintainer-only. 404s on an unknown token.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, set_page_subscriber_status
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
         channel = request.form.get("channel", "").strip()
         channel_id = request.form.get("channel_id", "").strip()
         new_status = request.form.get("status", "unsubscribed")
+        if new_status not in PUBLIC_SUBSCRIBER_STATUSES:
+            return "Unknown subscriber status.\n", 400
         if channel and channel_id:
             set_page_subscriber_status(page["id"], channel, channel_id, new_status, db_path)
             flash(f"Status updated to {new_status}.", "success")
@@ -1026,6 +1155,8 @@ def register_routes(app):
         """POST /edit/<edit_token>/sensitivity — set how much this page hears about."""
         from db.models import set_page_sensitivity
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -1072,6 +1203,74 @@ def register_routes(app):
         conn.close()
         flash("Page status updated.", "success")
         return redirect(url_for("admin_pages"))
+
+    def _admin_page_or_404(page_id):
+        from db.models import get_page_by_id
+        page = get_page_by_id(page_id, current_app.config["DB_PATH"])
+        if not page:
+            abort(404)
+        return page
+
+    @app.route("/admin/pages/<int:page_id>/subscribers")
+    def admin_page_subscribers(page_id):
+        """GET /admin/pages/<page_id>/subscribers — every subscriber of a page, any status.
+
+        Maintainer only (Basic auth). Lists active, paused and unsubscribed
+        recipients with buttons to change their status, plus the form that
+        hand-adds a recipient; 404 for an unknown page.
+        """
+        from db.models import get_page_subscribers
+        page = _admin_page_or_404(page_id)
+        subscribers = get_page_subscribers(page_id, current_app.config["DB_PATH"])
+        return render_template("admin_page_subscribers.html", page=page,
+                               subscribers=subscribers, statuses=PAGE_SUBSCRIBER_STATUSES)
+
+    @app.route("/admin/pages/<int:page_id>/subscribers/add", methods=["POST"])
+    def admin_page_subscribe(page_id):
+        """POST /admin/pages/<page_id>/subscribers/add — subscribe a recipient to a page.
+
+        Maintainer only (Basic auth), and outside the public edge's
+        allowlist: an edit token must never let its holder point alerts at
+        someone else's chat or phone. Requires ``channel`` and ``channel_id``
+        (SMS/WhatsApp normalized to E.164); upserts the subscriber as active
+        and redirects back to the page's subscriber list. 404 for an unknown page.
+        """
+        from db.models import add_page_subscriber
+        page = _admin_page_or_404(page_id)
+        channel = request.form.get("channel", "").strip()
+        channel_id = request.form.get("channel_id", "").strip()
+        display_name = request.form.get("display_name", "").strip()
+        if not channel or not channel_id:
+            flash("Channel and channel ID are required.", "danger")
+            return redirect(url_for("admin_page_subscribers", page_id=page["id"]))
+        if channel in ("sms", "whatsapp"):
+            channel_id = normalize_e164(channel_id)
+        add_page_subscriber(page["id"], channel, channel_id, display_name,
+                            current_app.config["DB_PATH"])
+        flash("Subscribed to alerts for this page.", "success")
+        return redirect(url_for("admin_page_subscribers", page_id=page["id"]))
+
+    @app.route("/admin/pages/<int:page_id>/subscribers/status", methods=["POST"])
+    def admin_page_subscriber_status(page_id):
+        """POST /admin/pages/<page_id>/subscribers/status — set any subscriber status.
+
+        Maintainer only (Basic auth). Unlike the public unsubscribe route this
+        accepts ``active`` too, so it is how a subscriber is re-activated.
+        Requires ``channel`` and ``channel_id``; a status outside
+        ``PAGE_SUBSCRIBER_STATUSES`` is a 400. 404 for an unknown page.
+        """
+        from db.models import set_page_subscriber_status
+        page = _admin_page_or_404(page_id)
+        channel = request.form.get("channel", "").strip()
+        channel_id = request.form.get("channel_id", "").strip()
+        new_status = request.form.get("status", "")
+        if new_status not in PAGE_SUBSCRIBER_STATUSES:
+            return "Unknown subscriber status.\n", 400
+        if channel and channel_id:
+            set_page_subscriber_status(page["id"], channel, channel_id, new_status,
+                                       current_app.config["DB_PATH"])
+            flash(f"Status updated to {new_status}.", "success")
+        return redirect(url_for("admin_page_subscribers", page_id=page["id"]))
 
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():

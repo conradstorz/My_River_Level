@@ -143,30 +143,6 @@
       </div>
     </div>
 
-    <div class="card mb-3">
-      <div class="card-header">Subscribe to Alerts</div>
-      <div class="card-body">
-        <form method="post" action="{{ url_for('page_subscribe', edit_token=edit_token) }}">
-          <div class="mb-2">
-            <input type="text" name="display_name" class="form-control" placeholder="Your name (optional)">
-          </div>
-          <div class="mb-2">
-            <select name="channel" class="form-select">
-              <option value="sms">SMS</option>
-              <option value="whatsapp">WhatsApp</option>
-              <option value="telegram">Telegram</option>
-              <option value="facebook">Facebook Messenger</option>
-            </select>
-          </div>
-          <div class="input-group">
-            <input type="text" name="channel_id" class="form-control"
-                   placeholder="Phone / Chat ID / PSID" required>
-            <button class="btn btn-success" type="submit">Subscribe</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
     {% if subscribers %}
     <div class="card">
       <div class="card-header">Active Subscribers</div>

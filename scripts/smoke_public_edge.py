@@ -5,8 +5,9 @@ Run from the CLI machine:
     python scripts/smoke_public_edge.py [--base-url URL] [--view-token TOKEN]
 
 Expects 200 from /healthz, /pin (redirect followed) and /view/<token>, and 404
-from /, /settings and /webhook/twilio. Prints one line per check and exits 1
-on any mismatch; the view token is printed only as its first three characters.
+from /, /settings, /webhook/twilio and /pages/new (page creation is
+maintainer-only, so the edge must not route it). Prints one line per check
+and exits 1 on any mismatch; the view token is printed only as its first three characters.
 Standard library only. Note: each run's /pin request creates one pending page
 and counts against that route's per-IP rate limit.
 """
@@ -34,6 +35,8 @@ def build_checks(view_token):
         ("/", "/", BLOCKED),
         ("/settings", "/settings", BLOCKED),
         ("/webhook/twilio", "/webhook/twilio", BLOCKED),
+        ("/pages/new", "/pages/new", BLOCKED),
+        ("/admin/pages", "/admin/pages", BLOCKED),
     ]
 
 

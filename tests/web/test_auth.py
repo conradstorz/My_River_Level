@@ -104,9 +104,141 @@ def test_public_page_edit_does_not_require_auth(monkeypatch, tmp_db):
     assert c.get(f"/edit/{edit}").status_code == 200
 
 
-def test_new_page_does_not_require_auth(monkeypatch, tmp_db):
+def test_new_page_requires_auth(monkeypatch, tmp_db):
     c = _client(monkeypatch, tmp_db)
-    assert c.get("/pages/new").status_code == 200
+    assert c.get("/pages/new").status_code == 401
+    assert c.post("/pages/new", data={"page_name": "Spam"}).status_code == 401
+
+
+def test_new_page_refused_with_503_when_password_unconfigured(monkeypatch, tmp_db):
+    c = _client(monkeypatch, tmp_db, password=None)
+    assert c.get("/pages/new").status_code == 503
+
+
+def test_new_page_allowed_with_credentials(monkeypatch, tmp_db):
+    c = _client(monkeypatch, tmp_db)
+    assert c.get("/pages/new", headers=_auth()).status_code == 200
+
+
+def test_unauthenticated_post_to_new_page_creates_nothing(monkeypatch, tmp_db):
+    from db.models import get_db
+    c = _client(monkeypatch, tmp_db)
+    c.post("/pages/new", data={"page_name": "Spam"})
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS n FROM user_pages")
+    n = cur.fetchone()["n"]
+    cur.close()
+    conn.close()
+    assert n == 0
+
+
+# The Cloudflare Tunnel's public allowlist (docs/howto/this-deployment.md).
+TUNNEL_ALLOWLIST = r"^/(pin(/.*)?|view/.+|edit/.+|static/.+|healthz)$"
+
+
+def _page_with_subscriber(tmp_db, status="active"):
+    from db.models import (add_page_subscriber, create_user_page,
+                           get_page_by_edit_token, set_page_subscriber_status)
+    _, edit = create_user_page("Test", tmp_db)
+    page = get_page_by_edit_token(edit, tmp_db)
+    add_page_subscriber(page["id"], "telegram", "999", "Ann", tmp_db)
+    if status != "active":
+        set_page_subscriber_status(page["id"], "telegram", "999", status, tmp_db)
+    return page
+
+
+@pytest.mark.parametrize("with_auth", [False, True])
+def test_edit_token_subscribe_route_is_gone(monkeypatch, tmp_db, with_auth):
+    from db.models import create_user_page, get_page_by_edit_token, get_active_page_subscribers
+    c = _client(monkeypatch, tmp_db)
+    _, edit = create_user_page("Test", tmp_db)
+    page = get_page_by_edit_token(edit, tmp_db)
+    resp = c.post(f"/edit/{edit}/subscribe", headers=_auth() if with_auth else {},
+                  data={"channel": "telegram", "channel_id": "999"})
+    assert resp.status_code == 404
+    assert get_active_page_subscribers(page["id"], tmp_db) == []
+
+
+def test_public_editor_never_evaluates_basic_auth(monkeypatch, tmp_db):
+    """The public editor must not check a password: it is internet-reachable."""
+    from db.models import create_user_page
+    import web.auth as auth_mod
+    c = _client(monkeypatch, tmp_db)
+    _, edit = create_user_page("Test", tmp_db)
+
+    def _boom(*_a, **_k):
+        raise AssertionError("Basic auth evaluated on a public route")
+    monkeypatch.setattr(auth_mod, "check_password_hash", _boom)
+    for url in (f"/edit/{edit}", f"/edit/{edit}/gauges/search?q="):
+        resp = c.get(url, headers=_auth())
+        assert resp.status_code == 200
+        assert b"/subscribers/add" not in resp.data
+
+
+def test_admin_page_subscribers_requires_auth(monkeypatch, tmp_db):
+    from db.models import get_active_page_subscribers
+    c = _client(monkeypatch, tmp_db)
+    page = _page_with_subscriber(tmp_db, "unsubscribed")
+    base = f"/admin/pages/{page['id']}/subscribers"
+    assert c.get(base).status_code == 401
+    assert c.post(base + "/add", data={"channel": "telegram", "channel_id": "1"}).status_code == 401
+    assert c.post(base + "/status", data={"channel": "telegram", "channel_id": "999",
+                                          "status": "active"}).status_code == 401
+    assert get_active_page_subscribers(page["id"], tmp_db) == []
+
+
+def test_admin_page_subscribers_lists_every_status_and_links_from_pages(monkeypatch, tmp_db):
+    c = _client(monkeypatch, tmp_db)
+    page = _page_with_subscriber(tmp_db, "unsubscribed")
+    listing = c.get("/admin/pages", headers=_auth())
+    assert f"/admin/pages/{page['id']}/subscribers".encode() in listing.data
+    resp = c.get(f"/admin/pages/{page['id']}/subscribers", headers=_auth())
+    assert resp.status_code == 200
+    assert b"Ann" in resp.data and b"unsubscribed" in resp.data
+    assert f"/admin/pages/{page['id']}/subscribers/add".encode() in resp.data
+
+
+def test_admin_can_subscribe_a_recipient(monkeypatch, tmp_db):
+    from db.models import create_user_page, get_page_by_edit_token, get_active_page_subscribers
+    c = _client(monkeypatch, tmp_db)
+    _, edit = create_user_page("Test", tmp_db)
+    page = get_page_by_edit_token(edit, tmp_db)
+    resp = c.post(f"/admin/pages/{page['id']}/subscribers/add", headers=_auth(),
+                  data={"channel": "sms", "channel_id": "(502) 555-1234", "display_name": "Bo"})
+    assert resp.status_code == 302
+    subs = get_active_page_subscribers(page["id"], tmp_db)
+    assert [(s["channel"], s["channel_id"]) for s in subs] == [("sms", "+15025551234")]
+
+
+def test_admin_can_reactivate_a_subscriber(monkeypatch, tmp_db):
+    from db.models import get_active_page_subscribers
+    c = _client(monkeypatch, tmp_db)
+    page = _page_with_subscriber(tmp_db, "unsubscribed")
+    resp = c.post(f"/admin/pages/{page['id']}/subscribers/status", headers=_auth(),
+                  data={"channel": "telegram", "channel_id": "999", "status": "active"})
+    assert resp.status_code == 302
+    assert [s["channel_id"] for s in get_active_page_subscribers(page["id"], tmp_db)] == ["999"]
+
+
+def test_admin_subscriber_status_rejects_unknown_status(monkeypatch, tmp_db):
+    c = _client(monkeypatch, tmp_db)
+    page = _page_with_subscriber(tmp_db)
+    resp = c.post(f"/admin/pages/{page['id']}/subscribers/status", headers=_auth(),
+                  data={"channel": "telegram", "channel_id": "999", "status": "deleted"})
+    assert resp.status_code == 400
+
+
+def test_admin_page_subscribers_404_for_unknown_page(monkeypatch, tmp_db):
+    c = _client(monkeypatch, tmp_db)
+    assert c.get("/admin/pages/9999/subscribers", headers=_auth()).status_code == 404
+
+
+def test_admin_subscriber_paths_are_outside_the_tunnel_allowlist():
+    import re
+    for path in ("/admin/pages/1/subscribers", "/admin/pages/1/subscribers/add",
+                 "/admin/pages/1/subscribers/status"):
+        assert re.match(TUNNEL_ALLOWLIST, path) is None
 
 
 def test_healthz_does_not_require_auth(monkeypatch, tmp_db):

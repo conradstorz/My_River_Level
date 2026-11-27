@@ -70,9 +70,10 @@ def test_healthy_edge_passes_every_check_and_exits_zero(edge, capsys):
 
     assert code == 0
     checks = [line for line in lines if line.startswith(("PASS", "FAIL"))]
-    assert len(checks) == 6
+    assert len(checks) == 8
     assert all(line.startswith("PASS") for line in checks)
-    for path in ("/healthz", "/pin", "/view/", "/settings", "/webhook/twilio"):
+    for path in ("/healthz", "/pin", "/view/", "/settings", "/webhook/twilio",
+                 "/pages/new", "/admin/pages"):
         assert any(path in line for line in checks), path
 
 
@@ -105,7 +106,34 @@ def test_admin_route_exposed_fails_that_check_and_exits_nonzero(edge, capsys):
     assert len(failed) == 1
     assert "/settings" in failed[0]
     assert "401" in failed[0]
-    assert sum(line.startswith("PASS") for line in lines) == 5
+    assert sum(line.startswith("PASS") for line in lines) == 7
+
+
+def test_page_creation_exposed_fails_that_check(edge, capsys):
+    # Page creation is maintainer-only; the edge must not route /pages/new.
+    base, routes = edge
+    routes["/pages/new"] = 401
+
+    code = smoke.main(["--base-url", base, "--view-token", TOKEN])
+    failed = [line for line in _lines(capsys) if line.startswith("FAIL")]
+
+    assert code != 0
+    assert len(failed) == 1
+    assert failed[0].startswith("FAIL /pages/new:")
+    assert "401" in failed[0]
+
+
+def test_admin_subscriber_pages_exposed_fails_that_check(edge, capsys):
+    # Hand-adding page subscribers lives under /admin/pages, maintainer-only.
+    base, routes = edge
+    routes["/admin/pages"] = 401
+
+    code = smoke.main(["--base-url", base, "--view-token", TOKEN])
+    failed = [line for line in _lines(capsys) if line.startswith("FAIL")]
+
+    assert code != 0
+    assert len(failed) == 1
+    assert failed[0].startswith("FAIL /admin/pages:")
 
 
 def test_root_served_publicly_fails(edge, capsys):
@@ -151,7 +179,7 @@ def test_without_view_token_the_view_check_is_skipped(edge, capsys):
     lines = _lines(capsys)
 
     assert code == 0
-    assert sum(line.startswith("PASS") for line in lines) == 5
+    assert sum(line.startswith("PASS") for line in lines) == 7
     assert any(line.startswith("SKIP") and "/view/" in line for line in lines)
 
 
@@ -161,7 +189,7 @@ def test_unreachable_host_fails_every_check(capsys):
     lines = _lines(capsys)
 
     assert code != 0
-    assert sum(line.startswith("FAIL") for line in lines) == 6
+    assert sum(line.startswith("FAIL") for line in lines) == 8
     assert not any(line.startswith("PASS") for line in lines)
 
 

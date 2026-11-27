@@ -55,8 +55,8 @@ unsigned or unconfigured requests; see
 
 Subscribers who joined this way are **broadcast-only** — added to the
 global `subscribers` table, not to any landing page. To have them hear about
-a specific gauge, subscribe that same phone number on the page's editor
-(`/edit/<edit_token>`, **Subscribe to Alerts** card) instead — see
+a specific gauge, subscribe that same phone number on the page's admin
+subscriber list (`/admin/pages`, then **Subscribers**) instead — see
 [`add-gauges-as-admin.md`](add-gauges-as-admin.md).
 
 ## Facebook Messenger

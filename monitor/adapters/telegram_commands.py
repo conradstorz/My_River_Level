@@ -12,6 +12,8 @@ import logging
 
 from db.models import (
     SENSITIVITY_LEVELS,
+    ChatHasLivePage,
+    PageNotBindable,
     bind_page_to_chat,
     create_pin_page,
     get_page_for_chat,
@@ -38,6 +40,9 @@ NO_BASE_URL = ("The site address isn't configured yet, so I can't send a map lin
 NO_PAGE = "You don't have a river set up yet. Send /start to pick one on the map."
 TOKEN_NOT_FOUND = ("I couldn't find that page. Open the map link again and tap "
                    "\"Send alerts to Telegram\".")
+ADMIN_PAGE_NOT_BINDABLE = ("That link is for a page the site owner manages, so it "
+                           "can't be connected to a chat here. Ask the site owner "
+                           "to add you, or send /start to pick your own spot on the map.")
 
 SENSITIVITY_TEXT = {
     "floods": "Floods only",
@@ -69,7 +74,15 @@ def start_chat(chat_id, display_name, arg, db_path=None):
     """Handle /start [token]: bind a web-first page, or hand out the map link."""
     arg = (arg or "").strip()
     if arg:
-        page = bind_page_to_chat(arg, chat_id, display_name, db_path)
+        try:
+            page = bind_page_to_chat(arg, chat_id, display_name, db_path)
+        except ChatHasLivePage as exc:
+            river = exc.page["river_name"] or "your river"
+            return (f"This chat is already set up for {river}, so I left that "
+                    "page as it is. To switch to the page from this link, send "
+                    "/stop first, then tap the link again.")
+        except PageNotBindable:
+            return ADMIN_PAGE_NOT_BINDABLE
         if page is None:
             return TOKEN_NOT_FOUND
         if page["status"] == "active":

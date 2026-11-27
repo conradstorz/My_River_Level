@@ -288,6 +288,19 @@ def get_page_by_public_token(token, db_path=None):
     return dict(row) if row else None
 
 
+def get_page_by_id(page_id, db_path=None):
+    """Return the user_pages row with `page_id` as a dict, or None if not found."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM user_pages WHERE id=%s", (page_id,))
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+    return dict(row) if row else None
+
+
 def get_page_by_edit_token(token, db_path=None):
     """Return the user_pages row for `edit_token` as a dict, or None if not found."""
     conn = get_conn(db_path)
@@ -303,6 +316,21 @@ def get_page_by_edit_token(token, db_path=None):
 
 SENSITIVITY_LEVELS = ("floods", "unusual", "all")
 PAGE_STATUSES = ("pending", "active", "paused", "stopped")
+#: The values the page_subscribers.status CHECK constraint allows.
+PAGE_SUBSCRIBER_STATUSES = ("active", "paused", "unsubscribed")
+
+
+def live_page_sql(alias="up"):
+    """SQL predicate: the user_pages row (as `alias`; None for no prefix) is live.
+
+    A live page still references its sources: it is 'active' or 'paused',
+    or still 'pending' but with a pin saved (a web-first page awaiting its
+    Telegram bind). The retirement sweep keeps a user source while any live
+    page links it, and a chat may own at most one live page.
+    """
+    p = f"{alias}." if alias else ""
+    return (f"({p}status IN ('active', 'paused') "
+            f"OR ({p}status = 'pending' AND {p}pin_lat IS NOT NULL))")
 PIN_PAGE_NAME = "My river"
 
 
@@ -343,13 +371,42 @@ def get_page_for_chat(chat_id, db_path=None):
     return dict(row) if row else None
 
 
+class ChatHasLivePage(Exception):
+    """Raised by `bind_page_to_chat` when the chat already has a different live page.
+
+    `page` is that existing page's row, left untouched.
+    """
+
+    def __init__(self, page):
+        super().__init__(f"chat already has live page {page['id']}")
+        self.page = page
+
+
+class PageNotBindable(Exception):
+    """Raised by `bind_page_to_chat` for a page that is not a Pin page.
+
+    Only an unowned `pending` page (a web-first pin) can be claimed by a
+    chat. An admin-created Page has no owner and is not pending; binding it
+    would hand its curated sources to the public pin flow.
+    """
+
+
 def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
     """Make `chat_id` the owner and an active subscriber of the page.
 
     Returns the updated row, or None when the token is unknown, the page is
     stopped, or another chat already owns it. A page that already has its
-    pin becomes active; one still waiting for a pin stays pending. Any other
-    page this chat owned is stopped, so a chat has at most one live page.
+    pin becomes active; one still waiting for a pin stays pending.
+
+    Only a Pin page can be bound: one this chat already owns, or an unowned
+    page still `pending`. Any other unowned page (an admin-created Page)
+    raises `PageNotBindable` and nothing changes.
+
+    A chat has at most one live page. If the chat already owns a different
+    live page (active, paused, or pending with a pin saved) nothing changes
+    and `ChatHasLivePage` is raised: a deep link someone else sent must never
+    silently replace it. The chat switches deliberately with /stop first. A
+    pin-less pending page (an abandoned bare /start) is simply stopped.
     """
     chat_id = int(chat_id)
     conn = get_conn(db_path)
@@ -361,14 +418,25 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
             return None
         if page["owner_chat_id"] is not None and page["owner_chat_id"] != chat_id:
             return None
+        if page["owner_chat_id"] is None and page["status"] != "pending":
+            raise PageNotBindable(f"page {page['id']} is not a Pin page")
+        cur.execute(
+            f"""SELECT * FROM user_pages
+                WHERE owner_chat_id=%s AND id<>%s AND {live_page_sql(None)}
+                ORDER BY id DESC LIMIT 1""",
+            (chat_id, page["id"])
+        )
+        live = cur.fetchone()
+        if live is not None:
+            raise ChatHasLivePage(dict(live))
         # Only a pending page is promoted: re-binding a paused page (the
         # owner tapping the deep link again) must not silently undo the pause.
         if page["status"] == "pending" and page["pin_lat"] is not None:
             new_status = "active"
         else:
             new_status = page["status"]
-        # A chat owns at most one live page: binding a new one closes any
-        # other page this chat still had open, so its sources can retire.
+        # Anything else this chat still had open is a pin-less pending page;
+        # close it so the chat keeps exactly one page.
         cur.execute(
             """UPDATE user_pages SET status='stopped'
                WHERE owner_chat_id=%s AND id<>%s AND status<>'stopped'""",
@@ -394,20 +462,172 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
     return dict(updated)
 
 
+#: The most USGS sites + NOAA gauges one Page may reference. Enforced on pin
+#: save (which replaces a Page's sources) and on public Page editor adds; it
+#: bounds both the save-time verification fan-out and what one Page can make
+#: the pollers fetch.
+MAX_SOURCES_PER_PAGE = 20
+
+# Provision a source for a public path: new rows are origin='user'; an
+# existing row keeps its origin and only a retired user row is reactivated.
+_UPSERT_USER_SITE = """
+    INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
+    VALUES (%s, %s, %s, 'user', 1)
+    ON CONFLICT (site_number) DO UPDATE SET active = CASE
+        WHEN sites.origin = 'user' THEN 1 ELSE sites.active END
+    RETURNING id"""
+_UPSERT_USER_GAUGE = """
+    INSERT INTO noaa_gauges
+        (lid, station_name, action_stage, minor_flood_stage,
+         moderate_flood_stage, major_flood_stage, origin, active)
+    VALUES (%s, %s, %s, %s, %s, %s, 'user', 1)
+    ON CONFLICT (lid) DO UPDATE SET active = CASE
+        WHEN noaa_gauges.origin = 'user' THEN 1 ELSE noaa_gauges.active END
+    RETURNING id"""
+
+
+def _gauge_params(gauge):
+    return (gauge["lid"], gauge.get("station_name", ""),
+            gauge.get("action_stage"), gauge.get("minor_flood_stage"),
+            gauge.get("moderate_flood_stage"), gauge.get("major_flood_stage"))
+
+
+def _lock_page(cur, page_id):
+    """Row-lock the page until the transaction ends; False if it does not exist.
+
+    Every writer that changes a page's source links takes this lock first,
+    so a cap check and the insert it guards cannot interleave with another
+    writer's.
+    """
+    cur.execute("SELECT id FROM user_pages WHERE id=%s FOR UPDATE", (page_id,))
+    return cur.fetchone() is not None
+
+
+def _linked_source_count(cur, page_id):
+    cur.execute(
+        """SELECT (SELECT COUNT(*) FROM page_sites WHERE page_id=%s)
+                + (SELECT COUNT(*) FROM page_noaa_gauges WHERE page_id=%s) AS n""",
+        (page_id, page_id)
+    )
+    return cur.fetchone()["n"]
+
+
+def page_source_count(page_id, db_path=None):
+    """USGS sites + NOAA gauges currently linked to a page."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        return _linked_source_count(cur, page_id)
+    finally:
+        cur.close()
+        conn.close()
+
+
+# Does a page already link this source? Keyed by kind ("usgs" site number,
+# "noaa" LID, matched case-insensitively).
+_LINKED_SQL = {
+    "usgs": """SELECT 1 FROM page_sites ps JOIN sites s ON s.id = ps.site_id
+               WHERE ps.page_id=%s AND s.site_number=%s""",
+    "noaa": """SELECT 1 FROM page_noaa_gauges png
+               JOIN noaa_gauges g ON g.id = png.noaa_gauge_id
+               WHERE png.page_id=%s AND UPPER(g.lid)=UPPER(%s)""",
+}
+
+
+def page_links_source(page_id, kind, identifier, db_path=None):
+    """True when the page already links the USGS site number / NOAA LID."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(_LINKED_SQL[kind], (page_id, identifier))
+        return cur.fetchone() is not None
+    finally:
+        cur.close()
+        conn.close()
+
+
+SOURCE_ADDED = "added"
+SOURCE_ALREADY_LINKED = "already_linked"
+SOURCE_PAGE_FULL = "page_full"
+
+
+def _add_page_source(page_id, kind, params, max_sources, db_path):
+    if kind == "usgs":
+        upsert = _UPSERT_USER_SITE
+        link = """INSERT INTO page_sites (page_id, site_id) VALUES (%s, %s)
+                  ON CONFLICT DO NOTHING"""
+    else:
+        upsert = _UPSERT_USER_GAUGE
+        link = """INSERT INTO page_noaa_gauges (page_id, noaa_gauge_id) VALUES (%s, %s)
+                  ON CONFLICT DO NOTHING"""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        if not _lock_page(cur, page_id):
+            raise ValueError(f"unknown page {page_id}")
+        cur.execute(_LINKED_SQL[kind], (page_id, params[0]))
+        if cur.fetchone() is not None:
+            conn.rollback()
+            return SOURCE_ALREADY_LINKED
+        if _linked_source_count(cur, page_id) >= max_sources:
+            conn.rollback()
+            return SOURCE_PAGE_FULL
+        cur.execute(upsert, params)
+        cur.execute(link, (page_id, cur.fetchone()["id"]))
+        conn.commit()
+        return SOURCE_ADDED
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def add_page_site(page_id, site_number, station_name, parameter_code,
+                  max_sources=MAX_SOURCES_PER_PAGE, db_path=None):
+    """Provision a USGS site for a public editor add and link it, under the cap.
+
+    One transaction holding the page's row lock: the cap check and the
+    insert cannot race another writer. Returns SOURCE_ALREADY_LINKED (nothing
+    changes; a re-add on a full page is not refused), SOURCE_PAGE_FULL
+    (nothing is written), or SOURCE_ADDED. A new site is origin='user'; see
+    _UPSERT_USER_SITE for how an existing row is treated.
+    """
+    return _add_page_source(page_id, "usgs", (site_number, station_name, parameter_code),
+                            max_sources, db_path)
+
+
+def add_page_gauge(page_id, gauge, max_sources=MAX_SOURCES_PER_PAGE, db_path=None):
+    """Provision a NOAA gauge (a metadata dict) for a public editor add and link it.
+
+    Same transaction, cap and return values as `add_page_site`.
+    """
+    return _add_page_source(page_id, "noaa", _gauge_params(gauge), max_sources, db_path)
+
+
 def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges,
-             db_path=None):
+             db_path=None, max_sources=MAX_SOURCES_PER_PAGE):
     """Store a page's pin and replace its sources, provisioning any new ones.
 
     Everything happens in one transaction so a failure part-way leaves the
     page as it was. Sources are inserted with origin='user'; an existing row
-    keeps its origin but is reactivated, so a gauge the retirement sweep
-    switched off comes back the moment someone selects it again.
+    keeps its origin. A retired user-origin row is reactivated, so a gauge
+    the retirement sweep switched off comes back the moment someone selects
+    it again; an admin row's active flag is never touched, so a source the
+    maintainer switched off stays off.
+
+    The transaction holds the page's row lock, like the editor adds, and
+    raises ValueError (changing nothing) for more than `max_sources` sources.
     """
     if sensitivity not in SENSITIVITY_LEVELS:
         raise ValueError(f"unknown sensitivity {sensitivity!r}")
+    if len(usgs_sites) + len(noaa_gauges) > max_sources:
+        raise ValueError(f"a page can follow at most {max_sources} sources")
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
+        _lock_page(cur, page_id)
         cur.execute(
             """UPDATE user_pages
                SET pin_lat=%s, pin_lon=%s, river_name=%s, sensitivity=%s,
@@ -420,10 +640,7 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
         cur.execute("DELETE FROM page_noaa_gauges WHERE page_id=%s", (page_id,))
         for site in usgs_sites:
             cur.execute(
-                """INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
-                   VALUES (%s, %s, %s, 'user', 1)
-                   ON CONFLICT (site_number) DO UPDATE SET active = 1
-                   RETURNING id""",
+                _UPSERT_USER_SITE,
                 (site["site_number"], site.get("station_name", ""),
                  site.get("parameter_code", "00065"))
             )
@@ -433,17 +650,7 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
                 (page_id, site_id)
             )
         for gauge in noaa_gauges:
-            cur.execute(
-                """INSERT INTO noaa_gauges
-                   (lid, station_name, action_stage, minor_flood_stage,
-                    moderate_flood_stage, major_flood_stage, origin, active)
-                   VALUES (%s, %s, %s, %s, %s, %s, 'user', 1)
-                   ON CONFLICT (lid) DO UPDATE SET active = 1
-                   RETURNING id""",
-                (gauge["lid"], gauge.get("station_name", ""),
-                 gauge.get("action_stage"), gauge.get("minor_flood_stage"),
-                 gauge.get("moderate_flood_stage"), gauge.get("major_flood_stage"))
-            )
+            cur.execute(_UPSERT_USER_GAUGE, _gauge_params(gauge))
             gauge_id = cur.fetchone()["id"]
             cur.execute(
                 """INSERT INTO page_noaa_gauges (page_id, noaa_gauge_id)
@@ -492,9 +699,11 @@ def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
                               origin="admin"):
     """Insert gauge if not present; return its id.
 
-    An existing gauge keeps its original origin but is reactivated: a user
-    re-selecting a gauge the retirement sweep switched off must get polling
-    back without admin help.
+    An existing gauge keeps its original origin. A retired user-origin gauge
+    is reactivated: a user re-selecting a gauge the retirement sweep switched
+    off must get polling back without admin help. An admin gauge's active
+    flag is never changed, so one the maintainer switched off stays off
+    whoever adds it.
     """
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -504,7 +713,8 @@ def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
                (lid, station_name, action_stage, minor_flood_stage,
                 moderate_flood_stage, major_flood_stage, origin)
                VALUES (%s, %s, %s, %s, %s, %s, %s)
-               ON CONFLICT (lid) DO UPDATE SET active = 1""",
+               ON CONFLICT (lid) DO UPDATE SET active = CASE
+                   WHEN noaa_gauges.origin = 'user' THEN 1 ELSE noaa_gauges.active END""",
             (lid, station_name, action_stage, minor_stage, moderate_stage,
              major_stage, origin)
         )
@@ -639,7 +849,12 @@ def add_page_subscriber(page_id, channel, channel_id, display_name, db_path=None
 
 
 def set_page_subscriber_status(page_id, channel, channel_id, status, db_path=None):
-    """Update the status ('active', 'paused', or 'unsubscribed') of a page subscriber."""
+    """Update the status ('active', 'paused', or 'unsubscribed') of a page subscriber.
+
+    ValueError on a status outside PAGE_SUBSCRIBER_STATUSES.
+    """
+    if status not in PAGE_SUBSCRIBER_STATUSES:
+        raise ValueError(f"unknown subscriber status {status!r}")
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:
@@ -652,6 +867,19 @@ def set_page_subscriber_status(page_id, channel, channel_id, status, db_path=Non
     finally:
         cur.close()
         conn.close()
+
+
+def get_page_subscribers(page_id, db_path=None):
+    """Return every page_subscribers row for `page_id`, whatever its status, oldest first."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM page_subscribers WHERE page_id=%s ORDER BY id", (page_id,))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_active_page_subscribers(page_id, db_path=None):

@@ -60,16 +60,33 @@ def test_get_or_create_noaa_gauge_records_origin(tmp_db):
     assert gauge["active"] == 1
 
 
-def test_get_or_create_reactivates_a_retired_gauge(tmp_db):
-    get_or_create_noaa_gauge("MLUK2", "McAlpine", None, None, None, None, tmp_db)
+def _switch_off(tmp_db, lid):
     conn = get_db(tmp_db)
     cur = conn.cursor()
-    cur.execute("UPDATE noaa_gauges SET active=0 WHERE lid='MLUK2'")
+    cur.execute("UPDATE noaa_gauges SET active=0 WHERE lid=%s", (lid,))
     conn.commit()
     cur.close()
     conn.close()
+
+
+def test_get_or_create_reactivates_a_retired_user_gauge(tmp_db):
+    get_or_create_noaa_gauge("MLUK2", "McAlpine", None, None, None, None, tmp_db,
+                             origin="user")
+    _switch_off(tmp_db, "MLUK2")          # the retirement sweep's doing
+    get_or_create_noaa_gauge("MLUK2", "McAlpine", None, None, None, None, tmp_db,
+                             origin="user")
+    gauge = get_all_noaa_gauges(tmp_db)[0]
+    assert (gauge["origin"], gauge["active"]) == ("user", 1)
+
+
+@pytest.mark.parametrize("caller_origin", ["user", "admin"])
+def test_get_or_create_never_reenables_an_admin_gauge_switched_off(tmp_db, caller_origin):
     get_or_create_noaa_gauge("MLUK2", "McAlpine", None, None, None, None, tmp_db)
-    assert get_all_noaa_gauges(tmp_db)[0]["active"] == 1
+    _switch_off(tmp_db, "MLUK2")          # the maintainer's doing
+    get_or_create_noaa_gauge("MLUK2", "McAlpine", None, None, None, None, tmp_db,
+                             origin=caller_origin)
+    gauge = get_all_noaa_gauges(tmp_db)[0]
+    assert (gauge["origin"], gauge["active"]) == ("admin", 0)
 
 
 def test_get_all_noaa_gauges_active_only_skips_inactive(tmp_db):

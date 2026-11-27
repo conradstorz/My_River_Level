@@ -245,3 +245,27 @@ def test_river_name_prefers_noaa_stem_names_over_usgs(nwps):
          patch("monitor.pin_discovery.fetch_gauge_metadata", side_effect=meta):
         result = discover(*PIN, reach_km=50, fallback_radius_miles=25)
     assert result.river_name == "Falls Of The Ohio"
+
+
+def test_noaa_pairing_lookups_are_bounded_to_the_nearest_sites(nwps):
+    cap = pin_discovery.MAX_NOAA_PAIRING_LOOKUPS
+    # cap + 5 downstream sites, each farther than the last; the farthest is
+    # listed first so a bound that ignored distance would pick the wrong ones.
+    many = [_site(f"0399{i:04d}", f"OHIO R SITE {i}", -85.76 - 0.01 * (i + 1), 38.28)
+            for i in range(cap + 5)]
+    dm = {"type": "FeatureCollection", "features": list(reversed(many))}
+    catalog = _catalog(*[(f"0399{i:04d}", "00065") for i in range(cap + 5)])
+    looked_up = []
+
+    def meta(identifier, timeout=10):
+        looked_up.append(identifier)
+        return None
+
+    with patch("monitor.pin_discovery.requests.get", side_effect=_nldi(um=EMPTY, dm=dm)), \
+         patch("monitor.pin_discovery.nwis.get_info", return_value=catalog), \
+         patch("monitor.pin_discovery.fetch_gauge_metadata", side_effect=meta):
+        result = discover(*PIN, reach_km=50, fallback_radius_miles=25)
+    assert len(looked_up) == cap
+    assert sorted(looked_up) == [f"0399{i:04d}" for i in range(cap)]
+    # Every USGS site is still proposed; only the pairing work is bounded.
+    assert len([c for c in result.candidates if c.kind == "usgs"]) == cap + 5

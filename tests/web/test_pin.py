@@ -16,10 +16,7 @@ def client(tmp_db, monkeypatch):
     monkeypatch.setenv("ADMIN_PASSWORD", "testpass")
     monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     init_db(tmp_db)
-    routes_mod.PIN_CREATE_LIMITER.reset()
-    routes_mod.DISCOVER_TOKEN_LIMITER.reset()
-    routes_mod.DISCOVER_IP_LIMITER.reset()
-    routes_mod.PIN_SAVE_LIMITER.reset()
+    routes_mod.reset_limiters()
     from web.app import create_app
     import queue
     app = create_app(db_path=tmp_db, notification_queue=queue.Queue())
@@ -203,14 +200,31 @@ def test_save_is_rate_limited_per_token(client, tmp_db):
     assert resp.status_code == 429
 
 
-def test_save_rejects_too_many_sources(client, tmp_db):
+def test_save_rejects_more_sources_than_the_page_cap(client, tmp_db):
     page = create_pin_page(99, tmp_db)
     sources = [{"kind": "usgs", "id": f"{i:08d}", "parameter_code": "00065"}
-               for i in range(31)]
-    resp = client.post(f"/pin/{page['edit_token']}/save",
-                       json={**SAVE_BODY, "sources": sources})
+               for i in range(15)] + [{"kind": "noaa", "id": f"GAU{i:02d}"} for i in range(6)]
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site) as v, \
+         patch("web.routes.fetch_gauge_metadata", side_effect=_meta) as m:
+        resp = client.post(f"/pin/{page['edit_token']}/save",
+                           json={**SAVE_BODY, "sources": sources})
     assert resp.status_code == 400
-    assert "30" in resp.get_json()["error"]
+    assert resp.is_json and "20" in resp.get_json()["error"]
+    assert v.call_count == 0 and m.call_count == 0
+    assert get_page_sites(page["id"], tmp_db) == []
+    assert get_page_gauges(page["id"], tmp_db) == []
+    assert get_page_by_edit_token(page["edit_token"], tmp_db)["pin_lat"] is None
+
+
+def test_save_accepts_exactly_the_page_cap(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    sources = [{"kind": "usgs", "id": f"{i:08d}", "parameter_code": "00065"}
+               for i in range(20)]
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site):
+        resp = client.post(f"/pin/{page['edit_token']}/save",
+                           json={**SAVE_BODY, "sources": sources})
+    assert resp.status_code == 200, resp.data
+    assert len(get_page_sites(page["id"], tmp_db)) == 20
 
 
 def test_save_skips_invalid_parameter_code(client, tmp_db):
@@ -241,7 +255,7 @@ def test_pin_create_rate_limit_keys_by_forwarded_ip_when_trusted(tmp_db, monkeyp
     monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     monkeypatch.setenv("TRUSTED_PROXY_COUNT", "1")
     init_db(tmp_db)
-    routes_mod.PIN_CREATE_LIMITER.reset()
+    routes_mod.reset_limiters()
     from web.app import create_app
     import queue
     app = create_app(db_path=tmp_db, notification_queue=queue.Queue())
@@ -262,7 +276,7 @@ def test_pin_create_rate_limit_ignores_forwarded_ip_without_trust(tmp_db, monkey
     monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
     monkeypatch.delenv("TRUSTED_PROXY_COUNT", raising=False)
     init_db(tmp_db)
-    routes_mod.PIN_CREATE_LIMITER.reset()
+    routes_mod.reset_limiters()
     from web.app import create_app
     import queue
     app = create_app(db_path=tmp_db, notification_queue=queue.Queue())
@@ -316,3 +330,133 @@ def test_edit_page_sensitivity_rejects_unknown_value(client, tmp_db):
     client.post(f"/edit/{page['edit_token']}/sensitivity", data={"sensitivity": "loud"})
     assert get_page_by_edit_token(page["edit_token"], tmp_db)["sensitivity"] == "unusual"
     assert client.post("/edit/nope/sensitivity", data={"sensitivity": "all"}).status_code == 404
+
+
+# ── Pin-page guard ──────────────────────────────────────────────────────────
+
+def test_admin_created_page_token_is_404_on_every_pin_route(client, tmp_db):
+    _public, edit_token = create_user_page("Admin River", tmp_db)
+    with patch("web.routes.discover", return_value=DISCOVERY) as d, \
+         patch("web.routes.validate_usgs_site", side_effect=_valid_site) as v:
+        assert client.get(f"/pin/{edit_token}").status_code == 404
+        assert client.post(f"/pin/{edit_token}/discover",
+                           json={"lat": 38.28, "lon": -85.76}).status_code == 404
+        assert client.post(f"/pin/{edit_token}/save", json=SAVE_BODY).status_code == 404
+    assert d.call_count == 0 and v.call_count == 0
+
+
+def test_owned_pin_page_stays_reachable_after_activation(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site), \
+         patch("web.routes.fetch_gauge_metadata", side_effect=_meta):
+        client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY)
+    assert get_page_by_edit_token(page["edit_token"], tmp_db)["status"] == "active"
+    assert client.get(f"/pin/{page['edit_token']}").status_code == 200
+
+
+# ── Per-visitor limits ──────────────────────────────────────────────────────
+
+def test_save_is_rate_limited_per_visitor_across_tokens(client, tmp_db):
+    limit = routes_mod.PIN_SAVE_VISITOR_LIMITER.limit
+    assert limit > routes_mod.PIN_SAVE_LIMITER.limit
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site), \
+         patch("web.routes.fetch_gauge_metadata", side_effect=_meta):
+        for _ in range(limit):
+            page = create_pin_page(None, tmp_db)
+            resp = client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY)
+            assert resp.status_code == 200, resp.data
+        page = create_pin_page(None, tmp_db)
+        resp = client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY)
+    assert resp.status_code == 429 and resp.is_json
+    assert get_page_sites(page["id"], tmp_db) == []
+
+
+def test_ipv6_visitors_in_one_slash64_share_the_pin_create_limit(client):
+    for i in range(10):
+        resp = client.get("/pin", environ_base={"REMOTE_ADDR": f"2001:db8:1:2::{i + 1:x}"})
+        assert resp.status_code == 302
+    resp = client.get("/pin", environ_base={"REMOTE_ADDR": "2001:db8:1:2:abcd::1"})
+    assert resp.status_code == 429
+    resp = client.get("/pin", environ_base={"REMOTE_ADDR": "2001:db8:1:3::1"})
+    assert resp.status_code == 302
+
+
+def test_ipv4_visitors_are_keyed_by_full_address(client):
+    for _ in range(10):
+        assert client.get("/pin", environ_base={"REMOTE_ADDR": "203.0.113.5"}).status_code == 302
+    assert client.get("/pin", environ_base={"REMOTE_ADDR": "203.0.113.5"}).status_code == 429
+    assert client.get("/pin", environ_base={"REMOTE_ADDR": "203.0.113.6"}).status_code == 302
+
+
+def test_concurrent_discovery_beyond_the_visitor_cap_gets_429(client, tmp_db):
+    import threading
+    cap = routes_mod.DISCOVER_CONCURRENCY.max_in_flight
+    pages = [create_pin_page(None, tmp_db) for _ in range(cap + 2)]
+    entered = threading.Semaphore(0)
+    release = threading.Event()
+
+    def slow_discover(*args, **kwargs):
+        entered.release()
+        release.wait(10)
+        return DISCOVERY
+
+    results = []
+
+    def run(token):
+        with client.application.test_client() as other:
+            results.append(other.post(f"/pin/{token}/discover",
+                                      json={"lat": 38.28, "lon": -85.76}).status_code)
+
+    with patch("web.routes.discover", side_effect=slow_discover):
+        threads = [threading.Thread(target=run, args=(p["edit_token"],))
+                   for p in pages[:cap]]
+        for t in threads:
+            t.start()
+        try:
+            for _ in range(cap):
+                assert entered.acquire(timeout=10)
+            busy = client.post(f"/pin/{pages[cap]['edit_token']}/discover",
+                               json={"lat": 38.28, "lon": -85.76})
+        finally:
+            release.set()
+            for t in threads:
+                t.join(10)
+        assert busy.status_code == 429 and busy.is_json
+        assert results == [200] * cap
+        after = client.post(f"/pin/{pages[cap + 1]['edit_token']}/discover",
+                            json={"lat": 38.28, "lon": -85.76})
+    assert after.status_code == 200
+
+
+def test_failed_discovery_releases_its_concurrency_slot(client, tmp_db):
+    page = create_pin_page(None, tmp_db)
+    cap = routes_mod.DISCOVER_CONCURRENCY.max_in_flight
+    for _ in range(cap + 1):
+        assert client.post(f"/pin/{page['edit_token']}/discover",
+                           json={"lat": 95, "lon": 0}).status_code == 400
+    with patch("web.routes.discover", side_effect=RuntimeError("boom")):
+        for _ in range(cap + 1):
+            with pytest.raises(RuntimeError):
+                client.post(f"/pin/{page['edit_token']}/discover",
+                            json={"lat": 38.28, "lon": -85.76})
+    with patch("web.routes.discover", return_value=DISCOVERY):
+        assert client.post(f"/pin/{page['edit_token']}/discover",
+                           json={"lat": 38.28, "lon": -85.76}).status_code == 200
+
+
+def test_save_beyond_the_visitor_in_flight_cap_gets_429(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    limiter = routes_mod.SOURCE_WRITE_CONCURRENCY
+    visitor = "203.0.113.20"
+    for _ in range(limiter.max_in_flight):          # saves/adds already running
+        assert limiter.acquire(visitor)
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site) as v, \
+         patch("web.routes.fetch_gauge_metadata", side_effect=_meta) as m:
+        resp = client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY,
+                           environ_base={"REMOTE_ADDR": visitor})
+        assert resp.status_code == 429 and resp.is_json
+        assert v.call_count == 0 and m.call_count == 0
+        other = client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY,
+                            environ_base={"REMOTE_ADDR": "203.0.113.21"})
+    assert other.status_code == 200
+    assert limiter.in_flight("203.0.113.21") == 0     # slot given back

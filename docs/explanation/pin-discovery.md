@@ -38,7 +38,9 @@ the bounding-box listing are unaffected and are still proposed.
 
 ## Pairing NOAA gauges
 
-Each surviving USGS candidate is looked up on NWPS's per-gauge endpoint,
+The nearest surviving USGS candidates — at most `MAX_NOAA_PAIRING_LOOKUPS`
+(10), since each is a synchronous call made while the visitor waits — are
+looked up on NWPS's per-gauge endpoint,
 which resolves a USGS site number to its NOAA LID; a match inherits the
 USGS site's upstream/downstream tag. This lookup is necessary because NWPS's
 bounding-box gauge listing does not publish a `usgsId` on its entries at
