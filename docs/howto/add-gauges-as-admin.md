@@ -42,6 +42,11 @@
    Expected: the gauge appears under "Flood gauges (NOAA)" with its
    flood-prediction grade badge (see
    [`../explanation/gauge-quality-grading.md`](../explanation/gauge-quality-grading.md)).
+   A page holds at most 20 sources (USGS + NOAA); past that, **Add** is
+   refused with a "maximum of 20 gauges" banner until you remove one. The
+   editor is public to anyone with the edit link, so its changes are also
+   rate limited per IP (see
+   [`../reference/http-routes.md`](../reference/http-routes.md)).
 
 7. Attach a USGS river gauge the same way, under "River gauges (USGS)":
    enter its site number and parameter, then **Add**.
@@ -76,11 +81,14 @@
 
 ## How this differs from pin pages
 
-A page created here has `origin` `admin` and starts at sensitivity `all`, so
-it hears every alert type by default. Its sources are never touched by the
-retirement sweep no matter how many pages stop referencing them — only
-`user`-origin sources (the ones a public pin page provisions automatically)
-are ever deactivated that way. See
+A page created here starts at sensitivity `all`, so it hears every alert
+type by default. A source added on the portal Sites page (steps 1–3) is
+`admin`-origin and is never touched by the retirement sweep no matter how
+many pages stop referencing it. A source added for the first time through a
+page editor (steps 6–7) is `user`-origin, like the ones a pin page
+provisions: it stays polled while any live page links it and is deactivated
+once none does. Adding an existing source from the editor never changes its
+origin, so add a USGS site on the Sites page first if it must never retire. See
 [`../explanation/source-retirement.md`](../explanation/source-retirement.md).
 An admin page also has no owning Telegram chat and no lifecycle beyond its
 `active` flag — it is never `pending`, `paused`, or `stopped`, so it cannot

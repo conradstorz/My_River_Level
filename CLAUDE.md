@@ -166,7 +166,10 @@ or from `GET /pin`. Saving the pin provisions the chosen USGS sites and NOAA
 gauges with `origin='user'`; `monitor/retirement.py` deactivates them once no
 live page references them (a page is live when `active`, `paused`, or still
 `pending` with a pin saved; pinned pages never bound to Telegram are deleted
-after 7 days). Each page has a `sensitivity` dial
+after 7 days). Public page-editor adds (`/edit/<t>/gauges/add`, `/edit/<t>/sites/add`)
+also provision new sources as `origin='user'` (an existing source keeps its
+origin), are capped at `web.routes.MAX_SOURCES_PER_PAGE` per page, and are
+rate limited per visitor. Each page has a `sensitivity` dial
 (`floods` / `unusual` / `all`) applied by the dispatcher through
 `monitor.scheduler.alert_allowed`, and a lifecycle `status`
 (`pending` / `active` / `paused` / `stopped`); only `active` pages receive alerts.

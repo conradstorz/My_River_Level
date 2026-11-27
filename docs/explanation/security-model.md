@@ -63,6 +63,13 @@ USGS sites with NOAA gauges. A save may choose at most
 `MAX_SOURCES_PER_PAGE` (20) sources, checked before any of them is verified.
 The pin routes serve only Pin pages — bound to a Telegram chat, or still
 `pending` — so an admin-created page's token cannot be driven through them.
+The page editor (`/edit/<edit_token>`) is bounded the same way: every write
+shares a budget of 60 per IP per hour and the NOAA name search allows 30 per
+IP per hour (429 beyond, and keyed by visitor, so minting more pages does not
+reset them); an add is refused with a flash once the page already has
+`MAX_SOURCES_PER_PAGE` sources, before the gauge is looked up upstream; and a
+source the editor adds for the first time is `user`-origin, so it retires
+once no live page references it.
 An IPv6 visitor is keyed by its /64 (`client_key`), since one subscriber
 typically holds a whole /64 and could otherwise rotate addresses to reset
 every limit. It is explicitly an in-process, per-container brake, not a

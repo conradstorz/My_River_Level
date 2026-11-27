@@ -73,6 +73,11 @@ PIN_SAVE_VISITOR_LIMITER = RateLimiter(limit=30, per_seconds=3600)
 # Each discovery holds a waitress thread for several upstream calls, so one
 # visitor may only have this many in flight at once.
 DISCOVER_CONCURRENCY = ConcurrencyLimiter(max_in_flight=2)
+# The public Page editor is guarded only by its edit token, so its writes
+# (several of which verify against USGS/NOAA) and its NOAA gauge search are
+# throttled per visitor too.
+EDITOR_WRITE_VISITOR_LIMITER = RateLimiter(limit=60, per_seconds=3600)
+GAUGE_SEARCH_VISITOR_LIMITER = RateLimiter(limit=30, per_seconds=3600)
 
 #: The most USGS sites + NOAA gauges one Page may reference. Enforced on pin
 #: save (which replaces a Page's sources) and on public Page editor adds; it
@@ -150,6 +155,37 @@ def visitor_key():
     folded by ``client_key`` so an IPv6 visitor is keyed by its /64.
     """
     return client_key(request.remote_addr or "unknown")
+
+
+TOO_MANY_EDITS = ("Too many changes from your connection; please wait a while "
+                  "and try again.\n", 429)
+TOO_MANY_SEARCHES = ("Too many searches from your connection; please wait a while "
+                     "and try again.\n", 429)
+
+
+def _page_source_count(page_id, db_path):
+    """USGS sites + NOAA gauges currently linked to a page."""
+    conn = get_db(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """SELECT (SELECT COUNT(*) FROM page_sites WHERE page_id=%s)
+                    + (SELECT COUNT(*) FROM page_noaa_gauges WHERE page_id=%s) AS n""",
+            (page_id, page_id)
+        )
+        return cur.fetchone()["n"]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def _page_full(page_id, db_path):
+    """True (after flashing why) when the page is at MAX_SOURCES_PER_PAGE."""
+    if _page_source_count(page_id, db_path) < MAX_SOURCES_PER_PAGE:
+        return False
+    flash(f"This page already follows the maximum of {MAX_SOURCES_PER_PAGE} gauges. "
+          "Remove one before adding another.", "danger")
+    return True
 
 
 def _float_setting(key, default, db_path):
@@ -885,10 +921,17 @@ def register_routes(app):
         canonical LID, links it to the page, and redirects to the editor. Flashes
         an error and redirects if the token is unknown (404), the id is missing,
         or the gauge is not found.
+
+        A gauge new to the system is provisioned ``origin='user'`` so the
+        retirement sweep switches it off once no live Page references it; an
+        existing gauge keeps its origin. Refused (flash) when the page already
+        has MAX_SOURCES_PER_PAGE sources; 429 past the per-visitor write limit.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, get_or_create_noaa_gauge, link_page_gauge
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -896,6 +939,8 @@ def register_routes(app):
         identifier = request.form.get("lid", "").strip()
         if not identifier:
             flash("Gauge ID is required.", "danger")
+            return redirect(url_for("page_edit", edit_token=edit_token))
+        if _page_full(page["id"], db_path):
             return redirect(url_for("page_edit", edit_token=edit_token))
 
         meta = fetch_gauge_metadata(identifier)
@@ -907,7 +952,7 @@ def register_routes(app):
             meta["lid"], meta["station_name"],
             meta["action_stage"], meta["minor_flood_stage"],
             meta["moderate_flood_stage"], meta["major_flood_stage"],
-            db_path,
+            db_path, origin="user",
         )
         link_page_gauge(page["id"], gauge_id, db_path)
         flash(f"Gauge {meta['station_name']} added.", "success")
@@ -920,6 +965,8 @@ def register_routes(app):
         db_path = current_app.config["DB_PATH"]
         from db.models import (get_page_by_edit_token, get_page_gauges,
                                get_active_page_subscribers, get_page_sites)
+        if not GAUGE_SEARCH_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_SEARCHES
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -962,6 +1009,8 @@ def register_routes(app):
         from flask import abort
         from db.models import get_page_by_edit_token, unlink_page_gauge
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -980,10 +1029,17 @@ def register_routes(app):
         optional ``parameter_code``, validates the number against the USGS API,
         inserts the site if it is new, then links it to the page. 404s on an
         unknown edit token.
+
+        A new site is provisioned ``origin='user'`` (retired by the sweep once
+        unreferenced); an existing site keeps its origin. A retired user-origin
+        site is reactivated; an admin site the maintainer switched off stays off. Refused (flash) when the page already has
+        MAX_SOURCES_PER_PAGE sources; 429 past the per-visitor write limit.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, link_page_site
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -992,6 +1048,8 @@ def register_routes(app):
         param_code = request.form.get("parameter_code", "00065").strip() or "00065"
         if not site_number:
             flash("USGS site number is required.", "danger")
+            return redirect(url_for("page_edit", edit_token=edit_token))
+        if _page_full(page["id"], db_path):
             return redirect(url_for("page_edit", edit_token=edit_token))
 
         is_valid, usgs_name, error = validate_usgs_site(site_number, param_code)
@@ -1003,14 +1061,15 @@ def register_routes(app):
         cur = conn.cursor()
         try:
             cur.execute(
-                """INSERT INTO sites (site_number, station_name, parameter_code)
-                   VALUES (%s, %s, %s)
-                   ON CONFLICT (site_number) DO NOTHING""",
+                """INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
+                   VALUES (%s, %s, %s, 'user', 1)
+                   ON CONFLICT (site_number) DO UPDATE SET active = CASE
+                       WHEN sites.origin = 'user' THEN 1 ELSE sites.active END
+                   RETURNING id""",
                 (site_number, usgs_name, param_code)
             )
-            conn.commit()
-            cur.execute("SELECT id FROM sites WHERE site_number=%s", (site_number,))
             row = cur.fetchone()
+            conn.commit()
         finally:
             cur.close()
             conn.close()
@@ -1032,6 +1091,8 @@ def register_routes(app):
         from flask import abort
         from db.models import get_page_by_edit_token, unlink_page_site
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -1079,6 +1140,8 @@ def register_routes(app):
         from flask import abort
         from db.models import get_page_by_edit_token, set_page_subscriber_status
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)
@@ -1097,6 +1160,8 @@ def register_routes(app):
         """POST /edit/<edit_token>/sensitivity — set how much this page hears about."""
         from db.models import set_page_sensitivity
         db_path = current_app.config["DB_PATH"]
+        if not EDITOR_WRITE_VISITOR_LIMITER.allow(visitor_key()):
+            return TOO_MANY_EDITS
         page = get_page_by_edit_token(edit_token, db_path)
         if not page:
             abort(404)

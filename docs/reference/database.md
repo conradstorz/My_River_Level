@@ -15,7 +15,7 @@ Every table `init_db` creates, then the additive migrations it applies on every 
 | `last_success_at` | TIMESTAMPTZ (migration) | Timestamp of the most recent successful USGS fetch. | `db/models.py: record_site_fetch_success` |
 | `last_error` | TEXT NOT NULL DEFAULT '' (migration) | Most recent fetch-failure message; cleared on the next success. | `db/models.py: record_site_fetch_error`, `record_site_fetch_success` |
 | `last_error_at` | TIMESTAMPTZ (migration) | Timestamp of `last_error`. | `db/models.py: record_site_fetch_error` |
-| `origin` | TEXT NOT NULL DEFAULT 'admin' CHECK (`admin`, `user`) (migration) | `admin` = added on the portal Sites page; `user` = provisioned by the pin-onboarding flow, eligible for the retirement sweep. | `db/models.py: save_pin` |
+| `origin` | TEXT NOT NULL DEFAULT 'admin' CHECK (`admin`, `user`) (migration) | `admin` = added on the portal Sites page; `user` = provisioned by the pin-onboarding flow or first added through a page editor, eligible for the retirement sweep. An existing row's origin is never changed. | `db/models.py: save_pin`, `web/routes.py: page_add_site` |
 
 ## `settings`
 
@@ -108,7 +108,7 @@ Row is recorded on every `/start` so the portal can see who has met the bot, and
 | `quality_checked_at` | TIMESTAMPTZ (migration) | | `ForecastPollingThread` (`set_gauge_quality`) |
 | `has_forecast` | BOOLEAN (migration) | Deliberate tri-state: `TRUE` = NOAA publishes a forecast, `FALSE` = NOAA positively confirmed it does not, `NULL` = never successfully checked. `NULL` must never collapse into `FALSE`, or a failed fetch would wrongly claim the gauge has no forecast. | `ForecastPollingThread` (`set_gauge_forecast_availability`) |
 | `forecast_checked_at` | TIMESTAMPTZ (migration) | | `ForecastPollingThread` (`set_gauge_forecast_availability`) |
-| `origin` | TEXT NOT NULL DEFAULT 'admin' CHECK (`admin`, `user`) (migration) | `admin` = added on a landing page editor by an operator; `user` = provisioned by the pin-onboarding flow, eligible for the retirement sweep. | `db/models.py: save_pin` |
+| `origin` | TEXT NOT NULL DEFAULT 'admin' CHECK (`admin`, `user`) (migration) | `admin` = added through a page editor before editor adds became `user`-origin, or by operator tooling using `get_or_create_noaa_gauge`'s default; `user` = provisioned by the pin-onboarding flow or first added through a page editor, eligible for the retirement sweep. An existing row's origin is never changed. | `db/models.py: save_pin`, `web/routes.py: page_add_gauge` |
 | `active` | INTEGER NOT NULL DEFAULT 1 (migration) | 0/1 flag; `NoaaPollingThread` and `ForecastPollingThread` only act on gauges where this is 1. | `monitor/retirement.py: sweep` |
 
 ## `page_noaa_gauges`

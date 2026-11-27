@@ -1,11 +1,13 @@
 # Source retirement
 
 Every USGS site and NOAA gauge has an `origin`: `admin` for one added by an
-operator on the portal Sites page or a page editor, `user` for one
-provisioned automatically by the pin-onboarding flow. Only `user`-origin
-rows are ever touched by `monitor/retirement.py`'s `sweep` — an operator who
-added a gauge by hand will never find it silently deactivated because a pin
-page stopped using it.
+operator on the portal Sites page, `user` for one provisioned by the
+pin-onboarding flow or first added through a page editor (`/edit/<edit_token>`,
+which anyone holding the token can reach). Adding a source that already
+exists never changes its origin, so an admin-origin source referenced from an
+editor stays admin. Only `user`-origin rows are ever touched by
+`monitor/retirement.py`'s `sweep` — an operator who added a gauge by hand
+will never find it silently deactivated because a page stopped using it.
 
 ## What counts as live
 
