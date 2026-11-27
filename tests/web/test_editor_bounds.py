@@ -292,3 +292,22 @@ def test_gauge_search_is_throttled_per_visitor(client, page):
         assert client.get(url, environ_base={"REMOTE_ADDR": "198.51.100.5"}).status_code == 200
 
 
+
+@pytest.mark.parametrize("kind", ["gauge", "site"])
+def test_editor_add_beyond_the_visitor_in_flight_cap_gets_429(client, tmp_db, page, kind):
+    limiter = routes_mod.SOURCE_WRITE_CONCURRENCY
+    busy, idle = {"REMOTE_ADDR": "198.51.100.20"}, {"REMOTE_ADDR": "198.51.100.21"}
+    for _ in range(limiter.max_in_flight):
+        assert limiter.acquire("198.51.100.20")
+    with patch("web.routes.fetch_gauge_metadata",
+               side_effect=lambda i, timeout=10: _meta("NEW3")) as m, \
+         patch("web.routes.validate_usgs_site", return_value=(True, "NEW", "")) as v:
+        if kind == "gauge":
+            url, data = f"/edit/{page['edit_token']}/gauges/add", {"lid": "NEW3"}
+        else:
+            url, data = f"/edit/{page['edit_token']}/sites/add", {"site_number": "03294500"}
+        assert client.post(url, data=data, environ_base=busy).status_code == 429
+        assert m.call_count == 0 and v.call_count == 0
+        assert client.post(url, data=data, environ_base=idle).status_code == 302
+    assert _total_links(tmp_db) == 1
+    assert limiter.in_flight("198.51.100.21") == 0

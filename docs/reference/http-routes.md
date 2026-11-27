@@ -34,11 +34,11 @@ Guarded by an unguessable `public_token` or `edit_token` in the URL, not by Basi
 | method | path | auth | purpose | rate limit |
 |---|---|---|---|---|
 | GET | `/edit/<edit_token>` | token | Render the page editor with its gauges and active subscribers, or 404. Never evaluates Basic auth and never shows a subscribe form. | — |
-| POST | `/edit/<edit_token>/gauges/add` | token | Add a NOAA gauge to the page; a gauge new to the system is `user`-origin. Refused with a flash once the page has `MAX_SOURCES_PER_PAGE` (20) sources (checked atomically with the insert); re-adding a gauge already on the page is a no-op, never refused. | 60 per IP per hour, shared by every editor write (429 beyond) |
+| POST | `/edit/<edit_token>/gauges/add` | token | Add a NOAA gauge to the page; a gauge new to the system is `user`-origin. Refused with a flash once the page has `MAX_SOURCES_PER_PAGE` (20) sources (checked atomically with the insert); re-adding a gauge already on the page is a no-op, never refused. | 60 per IP per hour, shared by every editor write (429 beyond); at most 2 saves/adds in flight per IP (429 beyond) |
 | POST | `/edit/<edit_token>/gauges/remove` | token | Unlink a gauge from the page and redirect to the editor (404 on bad token). | 60 per IP per hour, shared by every editor write (429 beyond) |
 | GET | `/edit/<edit_token>/gauges/search` | token | Find NOAA gauges by name (`?q=&page=`). | 30 per IP per hour (429 beyond) |
 | POST | `/edit/<edit_token>/sensitivity` | token | Set how much this page hears about. | 60 per IP per hour, shared by every editor write (429 beyond) |
-| POST | `/edit/<edit_token>/sites/add` | token | Attach a USGS river gauge to the page; a site new to the system is `user`-origin. Refused with a flash once the page has `MAX_SOURCES_PER_PAGE` (20) sources (checked atomically with the insert); re-adding a site already on the page is a no-op, never refused. | 60 per IP per hour, shared by every editor write (429 beyond) |
+| POST | `/edit/<edit_token>/sites/add` | token | Attach a USGS river gauge to the page; a site new to the system is `user`-origin. Refused with a flash once the page has `MAX_SOURCES_PER_PAGE` (20) sources (checked atomically with the insert); re-adding a site already on the page is a no-op, never refused. | 60 per IP per hour, shared by every editor write (429 beyond); at most 2 saves/adds in flight per IP (429 beyond) |
 | POST | `/edit/<edit_token>/sites/remove` | token | Detach a USGS gauge from the page. | 60 per IP per hour, shared by every editor write (429 beyond) |
 | POST | `/edit/<edit_token>/unsubscribe` | token | Pause or remove a page subscriber (`paused` or `unsubscribed`; anything else, `active` included, 400 — re-activating is maintainer-only). | 60 per IP per hour, shared by every editor write (429 beyond) |
 | GET | `/view/<public_token>` | token | Render a public landing page, or 404 if missing/inactive. | — |
@@ -51,7 +51,7 @@ Also guarded by `edit_token` in the URL; additionally throttled because each cal
 |---|---|---|---|---|
 | GET | `/pin/<edit_token>` | token | The map screen. | — |
 | POST | `/pin/<edit_token>/discover` | token | Propose USGS/NOAA gauges for a lat/lon (NOAA pairing looked up for the nearest 10 USGS sites). | 20 per token and 60 per IP per hour; at most 2 in flight per IP (429 beyond) |
-| POST | `/pin/<edit_token>/save` | token | Store the pin and provision its sources. | 10 per token and 30 per IP per hour; max 20 sources (400 beyond) |
+| POST | `/pin/<edit_token>/save` | token | Store the pin and provision its sources. | 10 per token and 30 per IP per hour; at most 2 saves/adds in flight per IP (429 beyond); max 20 sources (400 beyond) |
 
 ## Webhooks (signature)
 

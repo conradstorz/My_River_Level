@@ -65,8 +65,9 @@ third-party API calls (NLDI, NWPS, USGS), so `web/ratelimit.py`'s
 discovery searches per token and 60 per IP per hour, and 10 saves per token
 plus 30 per IP per hour (the per-IP limit stops a visitor bypassing the
 per-token one by minting fresh pages). A `ConcurrencyLimiter` lets one IP
-have at most 2 discovery searches in flight, so a few slow searches cannot
-occupy every waitress thread, and each search pairs at most the nearest 10
+have at most 2 discovery searches in flight, and a second one at most 2 pin
+saves or editor adds in flight (each verifies its sources upstream), so a few
+slow requests cannot occupy every waitress thread, and each search pairs at most the nearest 10
 USGS sites with NOAA gauges. A save may choose at most
 `MAX_SOURCES_PER_PAGE` (20) sources, checked before any of them is verified.
 Every writer of a page's source links — a pin save, an editor add — holds

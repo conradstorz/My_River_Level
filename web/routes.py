@@ -13,6 +13,7 @@ fail closed: an unconfigured secret rejects every request rather than
 accepting them all.
 """
 
+import functools
 import hashlib
 import hmac
 import json
@@ -75,6 +76,9 @@ PIN_SAVE_VISITOR_LIMITER = RateLimiter(limit=30, per_seconds=3600)
 # Each discovery holds a waitress thread for several upstream calls, so one
 # visitor may only have this many in flight at once.
 DISCOVER_CONCURRENCY = ConcurrencyLimiter(max_in_flight=2)
+# A pin save and an editor add verify sources against USGS/NOAA while holding
+# a waitress thread too, so they share their own per-visitor in-flight cap.
+SOURCE_WRITE_CONCURRENCY = ConcurrencyLimiter(max_in_flight=2)
 # The public Page editor is guarded only by its edit token, so its writes
 # (several of which verify against USGS/NOAA) and its NOAA gauge search are
 # throttled per visitor too.
@@ -159,8 +163,31 @@ def visitor_key():
 
 TOO_MANY_EDITS = ("Too many changes from your connection; please wait a while "
                   "and try again.\n", 429)
+TOO_MANY_IN_FLIGHT = ("Another change from your connection is still running; please "
+                      "wait for it to finish and try again.\n", 429)
 TOO_MANY_SEARCHES = ("Too many searches from your connection; please wait a while "
                      "and try again.\n", 429)
+
+
+def _one_source_write_at_a_time(busy):
+    """Decorator: hold a SOURCE_WRITE_CONCURRENCY slot for the view's visitor.
+
+    When the visitor already has ``max_in_flight`` saves/adds running the
+    view is not entered and ``busy()`` (a 429) is returned. The slot is
+    released however the view ends, ``abort()`` included.
+    """
+    def wrap(view):
+        @functools.wraps(view)
+        def guarded(*args, **kwargs):
+            visitor = visitor_key()
+            if not SOURCE_WRITE_CONCURRENCY.acquire(visitor):
+                return busy()
+            try:
+                return view(*args, **kwargs)
+            finally:
+                SOURCE_WRITE_CONCURRENCY.release(visitor)
+        return guarded
+    return wrap
 
 
 def _flash_page_full():
@@ -795,6 +822,8 @@ def register_routes(app):
             DISCOVER_CONCURRENCY.release(visitor)
 
     @app.route("/pin/<edit_token>/save", methods=["POST"])
+    @_one_source_write_at_a_time(lambda: (jsonify(
+        {"error": "A save is already running; please wait for it."}), 429))
     def pin_save(edit_token):
         """POST /pin/<edit_token>/save — store the pin and provision its sources."""
         db_path = current_app.config["DB_PATH"]
@@ -907,6 +936,7 @@ def register_routes(app):
                                edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS)
 
     @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
+    @_one_source_write_at_a_time(lambda: TOO_MANY_IN_FLIGHT)
     def page_add_gauge(edit_token):
         """POST /edit/<edit_token>/gauges/add — add a NOAA gauge to the page.
 
@@ -1013,6 +1043,7 @@ def register_routes(app):
         return redirect(url_for("page_edit", edit_token=edit_token))
 
     @app.route("/edit/<edit_token>/sites/add", methods=["POST"])
+    @_one_source_write_at_a_time(lambda: TOO_MANY_IN_FLIGHT)
     def page_add_site(edit_token):
         """POST /edit/<edit_token>/sites/add — attach a USGS river gauge to the page.
 

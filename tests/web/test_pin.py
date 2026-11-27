@@ -442,3 +442,21 @@ def test_failed_discovery_releases_its_concurrency_slot(client, tmp_db):
     with patch("web.routes.discover", return_value=DISCOVERY):
         assert client.post(f"/pin/{page['edit_token']}/discover",
                            json={"lat": 38.28, "lon": -85.76}).status_code == 200
+
+
+def test_save_beyond_the_visitor_in_flight_cap_gets_429(client, tmp_db):
+    page = create_pin_page(99, tmp_db)
+    limiter = routes_mod.SOURCE_WRITE_CONCURRENCY
+    visitor = "203.0.113.20"
+    for _ in range(limiter.max_in_flight):          # saves/adds already running
+        assert limiter.acquire(visitor)
+    with patch("web.routes.validate_usgs_site", side_effect=_valid_site) as v, \
+         patch("web.routes.fetch_gauge_metadata", side_effect=_meta) as m:
+        resp = client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY,
+                           environ_base={"REMOTE_ADDR": visitor})
+        assert resp.status_code == 429 and resp.is_json
+        assert v.call_count == 0 and m.call_count == 0
+        other = client.post(f"/pin/{page['edit_token']}/save", json=SAVE_BODY,
+                            environ_base={"REMOTE_ADDR": "203.0.113.21"})
+    assert other.status_code == 200
+    assert limiter.in_flight("203.0.113.21") == 0     # slot given back
