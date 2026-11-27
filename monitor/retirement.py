@@ -16,14 +16,14 @@ after which their sources retire on the following sweep.
 
 import logging
 
-from db.models import get_db
+from db.models import get_db, live_page_sql
 
 logger = logging.getLogger(__name__)
 
 PENDING_PAGE_MAX_AGE_HOURS = 24
 PENDING_PINNED_MAX_AGE_HOURS = 168
 
-_LIVE_PAGE = "(up.status IN ('active', 'paused') OR (up.status = 'pending' AND up.pin_lat IS NOT NULL))"
+_LIVE_PAGE = live_page_sql("up")
 
 
 def sweep(db_path=None):

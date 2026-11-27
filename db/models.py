@@ -318,6 +318,19 @@ SENSITIVITY_LEVELS = ("floods", "unusual", "all")
 PAGE_STATUSES = ("pending", "active", "paused", "stopped")
 #: The values the page_subscribers.status CHECK constraint allows.
 PAGE_SUBSCRIBER_STATUSES = ("active", "paused", "unsubscribed")
+
+
+def live_page_sql(alias="up"):
+    """SQL predicate: the user_pages row (as `alias`; None for no prefix) is live.
+
+    A live page still references its sources: it is 'active' or 'paused',
+    or still 'pending' but with a pin saved (a web-first page awaiting its
+    Telegram bind). The retirement sweep keeps a user source while any live
+    page links it, and a chat may own at most one live page.
+    """
+    p = f"{alias}." if alias else ""
+    return (f"({p}status IN ('active', 'paused') "
+            f"OR ({p}status = 'pending' AND {p}pin_lat IS NOT NULL))")
 PIN_PAGE_NAME = "My river"
 
 
@@ -408,11 +421,9 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
         if page["owner_chat_id"] is None and page["status"] != "pending":
             raise PageNotBindable(f"page {page['id']} is not a Pin page")
         cur.execute(
-            """SELECT * FROM user_pages
-               WHERE owner_chat_id=%s AND id<>%s
-                 AND (status IN ('active', 'paused')
-                      OR (status='pending' AND pin_lat IS NOT NULL))
-               ORDER BY id DESC LIMIT 1""",
+            f"""SELECT * FROM user_pages
+                WHERE owner_chat_id=%s AND id<>%s AND {live_page_sql(None)}
+                ORDER BY id DESC LIMIT 1""",
             (chat_id, page["id"])
         )
         live = cur.fetchone()
