@@ -26,10 +26,14 @@ gauges and their live conditions, nothing more. Anyone holding an
 existing subscribers, set its sensitivity, and drive the whole pin flow (map, discover, save) for that
 one page — full control over that page's own sources and audience, but
 no route into any other page or the admin portal. What an edit token cannot
-do is add a recipient: `POST /edit/<edit_token>/subscribe` requires Basic
-auth, and the editor shows its form only to the maintainer, so a stranger
-cannot point a page's alerts at someone else's Telegram chat or phone. Pin
-pages get their subscriber only from the Telegram `/start` binding. Losing
+do is add a recipient or re-activate one who left: the public unsubscribe
+route accepts only `paused` and `unsubscribed`, and the editor has no
+subscribe form at all, so a stranger cannot point a page's alerts at someone
+else's Telegram chat or phone. The maintainer hand-adds and re-activates
+recipients under `/admin/pages/<page_id>/subscribers`, which is Basic-auth
+protected and outside the public edge's allowlist; no internet-reachable
+route evaluates Basic auth at all. Pin pages get their subscriber only from
+the Telegram `/start` binding. Losing
 an edit link is equivalent to losing write access to that one page.
 
 The two provider webhooks are authenticated by request signature instead of

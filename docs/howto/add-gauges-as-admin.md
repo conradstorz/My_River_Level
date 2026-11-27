@@ -54,11 +54,17 @@
    `page_sites` routes USGS alerts through — see
    [`../explanation/alert-routing-and-sensitivity.md`](../explanation/alert-routing-and-sensitivity.md).
 
-8. Subscribe a recipient under "Subscribe to Alerts": pick a **Channel**
-   (SMS, WhatsApp, Telegram, Facebook Messenger), enter their phone number,
-   chat ID, or PSID, and **Subscribe**.
-   Expected: the recipient appears under "Active Subscribers" and starts
-   receiving this page's alerts (subject to its sensitivity, below).
+8. Subscribe a recipient from the admin list: open `/admin/pages`, click
+   **Subscribers** under the page's name, then under "Subscribe a
+   recipient" pick a **Channel** (SMS, WhatsApp, Telegram, Facebook
+   Messenger), enter their phone number, chat ID, or PSID, and
+   **Subscribe**. (The public editor has no subscribe form: an edit link
+   must never let its holder point alerts at someone else.)
+   Expected: the recipient appears in the table as `active`, shows under
+   "Active Subscribers" on the editor, and starts receiving this page's
+   alerts (subject to its sensitivity, below). The same table's **Set
+   active** button is how a paused or unsubscribed recipient is brought
+   back; the editor can only pause or remove.
 
 9. Set the sensitivity dial under "Alert sensitivity" — **Floods only**,
    **Floods and unusual levels**, or **Everything, including rapid

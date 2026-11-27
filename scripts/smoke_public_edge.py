@@ -36,6 +36,7 @@ def build_checks(view_token):
         ("/settings", "/settings", BLOCKED),
         ("/webhook/twilio", "/webhook/twilio", BLOCKED),
         ("/pages/new", "/pages/new", BLOCKED),
+        ("/admin/pages", "/admin/pages", BLOCKED),
     ]
 
 

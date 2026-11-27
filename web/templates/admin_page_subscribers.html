@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Admin — {{ page.page_name }} subscribers{% endblock %}
+{% block content %}
+<h1 class="mb-1">Subscribers</h1>
+<p class="text-muted mb-4">
+  {{ page.page_name }}{% if page.river_name %} — {{ page.river_name }}{% endif %}
+  · <a href="{{ url_for('admin_pages') }}">All pages</a>
+</p>
+
+{# Hand-adding or re-activating a recipient is maintainer-only: this page is
+   behind Basic auth and outside the public edge's allowlist. #}
+<div class="card mb-4">
+  <div class="card-header">Subscribe a recipient</div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('admin_page_subscribe', page_id=page.id) }}">
+      <div class="row g-2">
+        <div class="col-md-3">
+          <input type="text" name="display_name" class="form-control" placeholder="Name (optional)">
+        </div>
+        <div class="col-md-3">
+          <select name="channel" class="form-select">
+            <option value="sms">SMS</option>
+            <option value="whatsapp">WhatsApp</option>
+            <option value="telegram">Telegram</option>
+            <option value="facebook">Facebook Messenger</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <input type="text" name="channel_id" class="form-control"
+                 placeholder="Phone / Chat ID / PSID" required>
+        </div>
+        <div class="col-md-2">
+          <button class="btn btn-success w-100" type="submit">Subscribe</button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if subscribers %}
+<table class="table table-striped">
+  <thead><tr><th>Name</th><th>Channel</th><th>ID</th><th>Status</th><th></th></tr></thead>
+  <tbody>
+  {% for s in subscribers %}
+  <tr>
+    <td>{{ s.display_name or "—" }}</td>
+    <td>{{ s.channel }}</td>
+    <td><small>{{ s.channel_id }}</small></td>
+    <td><span class="badge bg-{{ 'success' if s.status == 'active' else 'secondary' }}">{{ s.status }}</span></td>
+    <td class="d-flex gap-1">
+      {% for st in statuses if st != s.status %}
+      <form method="post" action="{{ url_for('admin_page_subscriber_status', page_id=page.id) }}" class="m-0">
+        <input type="hidden" name="channel" value="{{ s.channel }}">
+        <input type="hidden" name="channel_id" value="{{ s.channel_id }}">
+        <input type="hidden" name="status" value="{{ st }}">
+        <button class="btn btn-sm btn-outline-secondary">Set {{ st }}</button>
+      </form>
+      {% endfor %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No subscribers yet.</p>
+{% endif %}
+{% endblock %}

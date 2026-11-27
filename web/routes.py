@@ -35,7 +35,6 @@ from monitor.search_cache import get_or_compute
 from monitor.noaa_search import search_noaa_gauges_by_name
 from monitor.gauge_quality import split_quality_detail
 from monitor.pin_discovery import discover
-from web.auth import is_admin_request
 from web.ratelimit import ConcurrencyLimiter, RateLimiter, client_key
 
 logger = logging.getLogger(__name__)
@@ -910,8 +909,7 @@ def register_routes(app):
         sites = get_page_sites(page["id"], db_path)
         return render_template("page_edit.html", page=page, gauges=gauges,
                                subscribers=subscribers, sites=sites,
-                               edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS,
-                               can_subscribe=is_admin_request())
+                               edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS)
 
     @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
     def page_add_gauge(edit_token):
@@ -1002,8 +1000,7 @@ def register_routes(app):
             "page_edit.html", page=page, gauges=gauges, subscribers=subscribers,
             sites=sites, edit_token=edit_token, gauge_matches=gauge_matches,
             gauge_query=query, gauge_page=pageno, gauge_pages=pages,
-            gauge_total=total, sensitivity_options=SENSITIVITY_LABELS,
-            can_subscribe=is_admin_request())
+            gauge_total=total, sensitivity_options=SENSITIVITY_LABELS)
 
     @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
     def page_remove_gauge(edit_token):
@@ -1104,33 +1101,6 @@ def register_routes(app):
             flash("River gauge removed from this page.", "success")
         return redirect(url_for("page_edit", edit_token=edit_token))
 
-    @app.route("/edit/<edit_token>/subscribe", methods=["POST"])
-    def page_subscribe(edit_token):
-        """POST /edit/<edit_token>/subscribe — subscribe a recipient to the page's alerts.
-
-        Maintainer only (Basic auth): an edit token must never let its holder
-        point alerts at someone else's chat or phone. Requires ``channel`` and
-        ``channel_id`` (SMS/WhatsApp normalized to E.164); adds the page
-        subscriber and redirects to the editor. 404s on an unknown token.
-        """
-        from flask import abort
-        from db.models import get_page_by_edit_token, add_page_subscriber
-        db_path = current_app.config["DB_PATH"]
-        page = get_page_by_edit_token(edit_token, db_path)
-        if not page:
-            abort(404)
-        channel = request.form.get("channel", "").strip()
-        channel_id = request.form.get("channel_id", "").strip()
-        display_name = request.form.get("display_name", "").strip()
-        if not channel or not channel_id:
-            flash("Channel and channel ID are required.", "danger")
-            return redirect(url_for("page_edit", edit_token=edit_token))
-        if channel in ("sms", "whatsapp"):
-            channel_id = normalize_e164(channel_id)
-        add_page_subscriber(page["id"], channel, channel_id, display_name, db_path)
-        flash("Subscribed to alerts for this page.", "success")
-        return redirect(url_for("page_edit", edit_token=edit_token))
-
     @app.route("/edit/<edit_token>/unsubscribe", methods=["POST"])
     def page_unsubscribe(edit_token):
         """POST /edit/<edit_token>/unsubscribe — pause or remove a page subscriber.
@@ -1212,6 +1182,74 @@ def register_routes(app):
         conn.close()
         flash("Page status updated.", "success")
         return redirect(url_for("admin_pages"))
+
+    def _admin_page_or_404(page_id):
+        from db.models import get_page_by_id
+        page = get_page_by_id(page_id, current_app.config["DB_PATH"])
+        if not page:
+            abort(404)
+        return page
+
+    @app.route("/admin/pages/<int:page_id>/subscribers")
+    def admin_page_subscribers(page_id):
+        """GET /admin/pages/<page_id>/subscribers — every subscriber of a page, any status.
+
+        Maintainer only (Basic auth). Lists active, paused and unsubscribed
+        recipients with buttons to change their status, plus the form that
+        hand-adds a recipient; 404 for an unknown page.
+        """
+        from db.models import get_page_subscribers
+        page = _admin_page_or_404(page_id)
+        subscribers = get_page_subscribers(page_id, current_app.config["DB_PATH"])
+        return render_template("admin_page_subscribers.html", page=page,
+                               subscribers=subscribers, statuses=PAGE_SUBSCRIBER_STATUSES)
+
+    @app.route("/admin/pages/<int:page_id>/subscribers/add", methods=["POST"])
+    def admin_page_subscribe(page_id):
+        """POST /admin/pages/<page_id>/subscribers/add — subscribe a recipient to a page.
+
+        Maintainer only (Basic auth), and outside the public edge's
+        allowlist: an edit token must never let its holder point alerts at
+        someone else's chat or phone. Requires ``channel`` and ``channel_id``
+        (SMS/WhatsApp normalized to E.164); upserts the subscriber as active
+        and redirects back to the page's subscriber list. 404 for an unknown page.
+        """
+        from db.models import add_page_subscriber
+        page = _admin_page_or_404(page_id)
+        channel = request.form.get("channel", "").strip()
+        channel_id = request.form.get("channel_id", "").strip()
+        display_name = request.form.get("display_name", "").strip()
+        if not channel or not channel_id:
+            flash("Channel and channel ID are required.", "danger")
+            return redirect(url_for("admin_page_subscribers", page_id=page["id"]))
+        if channel in ("sms", "whatsapp"):
+            channel_id = normalize_e164(channel_id)
+        add_page_subscriber(page["id"], channel, channel_id, display_name,
+                            current_app.config["DB_PATH"])
+        flash("Subscribed to alerts for this page.", "success")
+        return redirect(url_for("admin_page_subscribers", page_id=page["id"]))
+
+    @app.route("/admin/pages/<int:page_id>/subscribers/status", methods=["POST"])
+    def admin_page_subscriber_status(page_id):
+        """POST /admin/pages/<page_id>/subscribers/status — set any subscriber status.
+
+        Maintainer only (Basic auth). Unlike the public unsubscribe route this
+        accepts ``active`` too, so it is how a subscriber is re-activated.
+        Requires ``channel`` and ``channel_id``; a status outside
+        ``PAGE_SUBSCRIBER_STATUSES`` is a 400. 404 for an unknown page.
+        """
+        from db.models import set_page_subscriber_status
+        page = _admin_page_or_404(page_id)
+        channel = request.form.get("channel", "").strip()
+        channel_id = request.form.get("channel_id", "").strip()
+        new_status = request.form.get("status", "")
+        if new_status not in PAGE_SUBSCRIBER_STATUSES:
+            return "Unknown subscriber status.\n", 400
+        if channel and channel_id:
+            set_page_subscriber_status(page["id"], channel, channel_id, new_status,
+                                       current_app.config["DB_PATH"])
+            flash(f"Status updated to {new_status}.", "success")
+        return redirect(url_for("admin_page_subscribers", page_id=page["id"]))
 
     @app.route("/broadcast", methods=["GET", "POST"])
     def broadcast():

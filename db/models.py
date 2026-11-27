@@ -288,6 +288,19 @@ def get_page_by_public_token(token, db_path=None):
     return dict(row) if row else None
 
 
+def get_page_by_id(page_id, db_path=None):
+    """Return the user_pages row with `page_id` as a dict, or None if not found."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM user_pages WHERE id=%s", (page_id,))
+        row = cur.fetchone()
+    finally:
+        cur.close()
+        conn.close()
+    return dict(row) if row else None
+
+
 def get_page_by_edit_token(token, db_path=None):
     """Return the user_pages row for `edit_token` as a dict, or None if not found."""
     conn = get_conn(db_path)
@@ -708,6 +721,19 @@ def set_page_subscriber_status(page_id, channel, channel_id, status, db_path=Non
     finally:
         cur.close()
         conn.close()
+
+
+def get_page_subscribers(page_id, db_path=None):
+    """Return every page_subscribers row for `page_id`, whatever its status, oldest first."""
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT * FROM page_subscribers WHERE page_id=%s ORDER BY id", (page_id,))
+        rows = cur.fetchall()
+    finally:
+        cur.close()
+        conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_active_page_subscribers(page_id, db_path=None):

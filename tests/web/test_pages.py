@@ -236,20 +236,6 @@ def test_remove_gauge_from_page(client):
     assert get_page_gauges(page["id"], db_path) == []
 
 
-def test_subscribe_to_page(client):
-    from db.models import create_user_page, get_page_by_edit_token, get_active_page_subscribers
-    db_path = client.application.config["DB_PATH"]
-    _, edit = create_user_page("Test", db_path)
-    page = get_page_by_edit_token(edit, db_path)
-    resp = client.post(f"/edit/{edit}/subscribe",
-                       data={"channel": "telegram", "channel_id": "12345678", "display_name": "Alice"},
-                       follow_redirects=True)
-    assert resp.status_code == 200
-    subs = get_active_page_subscribers(page["id"], db_path)
-    assert len(subs) == 1
-    assert subs[0]["channel_id"] == "12345678"
-
-
 def test_unsubscribe_from_page(client):
     from db.models import create_user_page, get_page_by_edit_token, add_page_subscriber, get_active_page_subscribers
     db_path = client.application.config["DB_PATH"]

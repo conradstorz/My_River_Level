@@ -11,7 +11,9 @@ Guarded by HTTP Basic auth (`web/auth.py`); endpoint names here are not in `PUBL
 | GET | `/` | admin | Render the dashboard with active sites' latest conditions and the 20 most recent notifications. | — |
 | GET | `/admin/pages` | admin | List all landing pages with gauge and active-subscriber counts. | — |
 | POST | `/admin/pages/<int:page_id>/toggle` | admin | Flip a page's active flag and redirect to the admin list. | — |
-| POST | `/edit/<edit_token>/subscribe` | admin | Subscribe a recipient to a page's alerts; the page editor shows this form only to the maintainer. | — |
+| GET | `/admin/pages/<int:page_id>/subscribers` | admin | List every subscriber of a page (any status) with status buttons and the hand-add form; 404 for an unknown page. | — |
+| POST | `/admin/pages/<int:page_id>/subscribers/add` | admin | Subscribe a recipient to a page's alerts (SMS/WhatsApp numbers normalized to E.164). | — |
+| POST | `/admin/pages/<int:page_id>/subscribers/status` | admin | Set a page subscriber's status (`active`, `paused` or `unsubscribed`; anything else 400) — the only way to re-activate one. | — |
 | GET, POST | `/broadcast` | admin | View the broadcast form, or queue a broadcast message to selected channels. | — |
 | GET, POST | `/pages/new` | admin | View the page-creation form (GET), or create a public landing page (POST). | — |
 | GET, POST | `/settings` | admin | Redirect to the first settings sub-page. | — |
@@ -31,7 +33,7 @@ Guarded by an unguessable `public_token` or `edit_token` in the URL, not by Basi
 
 | method | path | auth | purpose | rate limit |
 |---|---|---|---|---|
-| GET | `/edit/<edit_token>` | token | Render the page editor with its gauges and active subscribers, or 404. | — |
+| GET | `/edit/<edit_token>` | token | Render the page editor with its gauges and active subscribers, or 404. Never evaluates Basic auth and never shows a subscribe form. | — |
 | POST | `/edit/<edit_token>/gauges/add` | token | Add a NOAA gauge to the page; a gauge new to the system is `user`-origin. Refused with a flash once the page has `MAX_SOURCES_PER_PAGE` (20) sources. | 60 per IP per hour, shared by every editor write (429 beyond) |
 | POST | `/edit/<edit_token>/gauges/remove` | token | Unlink a gauge from the page and redirect to the editor (404 on bad token). | 60 per IP per hour, shared by every editor write (429 beyond) |
 | GET | `/edit/<edit_token>/gauges/search` | token | Find NOAA gauges by name (`?q=&page=`). | 30 per IP per hour (429 beyond) |

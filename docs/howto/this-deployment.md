@@ -224,8 +224,9 @@ repo; the `cloudflare-tunnel` README records them. One rule for
 ^/(pin(/.*)?|view/.+|edit/.+|static/.+|healthz)$
 ```
 
-and a catch-all returns 404. The admin portal, page creation (`/pages/new`)
-and the channel webhooks (`/webhook/...`) therefore stay tailnet-only.
+and a catch-all returns 404. The admin portal, page creation (`/pages/new`),
+hand-adding a page subscriber (`/admin/pages/<page_id>/subscribers`) and the
+channel webhooks (`/webhook/...`) therefore stay tailnet-only.
 
 1. Create the shared network once on `<docker-host>`, before starting either
    project.
@@ -254,9 +255,9 @@ and the channel webhooks (`/webhook/...`) therefore stay tailnet-only.
    ```bash
    python scripts/smoke_public_edge.py --view-token <public_token>
    ```
-   Expected: seven `PASS` lines (200 from `/healthz`, `/pin` and
-   `/view/<public_token>`; 404 from `/`, `/settings`, `/webhook/twilio` and
-   `/pages/new`)
+   Expected: eight `PASS` lines (200 from `/healthz`, `/pin` and
+   `/view/<public_token>`; 404 from `/`, `/settings`, `/webhook/twilio`,
+   `/pages/new` and `/admin/pages`)
    and exit status 0; the token is printed only as its first three
    characters. Take `<public_token>` from any live page. Each run's
    `/pin` request creates one pending page, swept after 7 days. Against
