@@ -98,9 +98,10 @@ proxy hop in front of the app:
   (the separate `cloudflare-tunnel` project) reaches the app directly at
   `http://river-app:5743` over the `public-edge` network, bypassing Traefik.
   Its dashboard ingress admits only `/pin`, `/pin/...`, `/view/...`,
-  `/edit/...`, `/pages/new`, `/static/...` and `/healthz`, and returns 404
-  for everything else, so the portal and the channel webhooks are never
-  published.
+  `/edit/...`, `/static/...` and `/healthz` (path regex
+  `^/(pin(/.*)?|view/.+|edit/.+|static/.+|healthz)$`), and returns 404
+  for everything else, so the portal, page creation and the channel
+  webhooks are never published.
 
 Because each path has one hop, set `TRUSTED_PROXY_COUNT=1` (step 3). Point
 `public_base_url` (step 7) at `https://river.ohr3023.org`, so the links in

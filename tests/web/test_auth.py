@@ -104,9 +104,83 @@ def test_public_page_edit_does_not_require_auth(monkeypatch, tmp_db):
     assert c.get(f"/edit/{edit}").status_code == 200
 
 
-def test_new_page_does_not_require_auth(monkeypatch, tmp_db):
+def test_new_page_requires_auth(monkeypatch, tmp_db):
     c = _client(monkeypatch, tmp_db)
-    assert c.get("/pages/new").status_code == 200
+    assert c.get("/pages/new").status_code == 401
+    assert c.post("/pages/new", data={"page_name": "Spam"}).status_code == 401
+
+
+def test_new_page_refused_with_503_when_password_unconfigured(monkeypatch, tmp_db):
+    c = _client(monkeypatch, tmp_db, password=None)
+    assert c.get("/pages/new").status_code == 503
+
+
+def test_new_page_allowed_with_credentials(monkeypatch, tmp_db):
+    c = _client(monkeypatch, tmp_db)
+    assert c.get("/pages/new", headers=_auth()).status_code == 200
+
+
+def test_unauthenticated_post_to_new_page_creates_nothing(monkeypatch, tmp_db):
+    from db.models import get_db
+    c = _client(monkeypatch, tmp_db)
+    c.post("/pages/new", data={"page_name": "Spam"})
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) AS n FROM user_pages")
+    n = cur.fetchone()["n"]
+    cur.close()
+    conn.close()
+    assert n == 0
+
+
+def test_page_subscribe_requires_auth(monkeypatch, tmp_db):
+    from db.models import (create_user_page, get_page_by_edit_token,
+                           get_active_page_subscribers)
+    c = _client(monkeypatch, tmp_db)
+    _, edit = create_user_page("Test", tmp_db)
+    page = get_page_by_edit_token(edit, tmp_db)
+    resp = c.post(f"/edit/{edit}/subscribe",
+                  data={"channel": "telegram", "channel_id": "999"})
+    assert resp.status_code == 401
+    assert get_active_page_subscribers(page["id"], tmp_db) == []
+
+
+def test_page_subscribe_allowed_with_credentials(monkeypatch, tmp_db):
+    from db.models import (create_user_page, get_page_by_edit_token,
+                           get_active_page_subscribers)
+    c = _client(monkeypatch, tmp_db)
+    _, edit = create_user_page("Test", tmp_db)
+    page = get_page_by_edit_token(edit, tmp_db)
+    resp = c.post(f"/edit/{edit}/subscribe", headers=_auth(),
+                  data={"channel": "telegram", "channel_id": "999"})
+    assert resp.status_code == 302
+    assert len(get_active_page_subscribers(page["id"], tmp_db)) == 1
+
+
+def test_public_editor_hides_subscribe_form_from_anonymous_viewers(monkeypatch, tmp_db):
+    from db.models import create_user_page
+    c = _client(monkeypatch, tmp_db)
+    _, edit = create_user_page("Test", tmp_db)
+    resp = c.get(f"/edit/{edit}")
+    assert resp.status_code == 200
+    assert f"/edit/{edit}/subscribe".encode() not in resp.data
+
+
+def test_public_editor_hides_subscribe_form_with_wrong_credentials(monkeypatch, tmp_db):
+    from db.models import create_user_page
+    c = _client(monkeypatch, tmp_db)
+    _, edit = create_user_page("Test", tmp_db)
+    resp = c.get(f"/edit/{edit}", headers=_auth(pw="wrong"))
+    assert resp.status_code == 200
+    assert f"/edit/{edit}/subscribe".encode() not in resp.data
+
+
+def test_public_editor_shows_subscribe_form_to_the_maintainer(monkeypatch, tmp_db):
+    from db.models import create_user_page
+    c = _client(monkeypatch, tmp_db)
+    _, edit = create_user_page("Test", tmp_db)
+    resp = c.get(f"/edit/{edit}", headers=_auth())
+    assert f"/edit/{edit}/subscribe".encode() in resp.data
 
 
 def test_healthz_does_not_require_auth(monkeypatch, tmp_db):

@@ -35,6 +35,7 @@ from monitor.search_cache import get_or_compute
 from monitor.noaa_search import search_noaa_gauges_by_name
 from monitor.gauge_quality import split_quality_detail
 from monitor.pin_discovery import discover
+from web.auth import is_admin_request
 from web.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,10 @@ PIN_SAVE_LIMITER = RateLimiter(limit=10, per_seconds=3600)
 # admin form, so the count needs an upper bound independent of what the map
 # UI happens to send.
 MAX_PIN_SOURCES = 30
+
+# The values the page_subscribers.status CHECK constraint allows; the public
+# unsubscribe route accepts nothing else.
+PAGE_SUBSCRIBER_STATUSES = ("active", "paused", "unsubscribed")
 
 SENSITIVITY_LABELS = [
     ("floods", "Floods only",
@@ -639,7 +644,7 @@ def register_routes(app):
 
     @app.route("/pages/new", methods=["GET", "POST"])
     def page_new():
-        """GET|POST /pages/new — create a public landing page.
+        """GET|POST /pages/new — create a public landing page (maintainer only).
 
         POST requires a page name, creates the page, and renders the created
         page with its public and edit tokens; GET renders the creation form.
@@ -808,7 +813,8 @@ def register_routes(app):
         sites = get_page_sites(page["id"], db_path)
         return render_template("page_edit.html", page=page, gauges=gauges,
                                subscribers=subscribers, sites=sites,
-                               edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS)
+                               edit_token=edit_token, sensitivity_options=SENSITIVITY_LABELS,
+                               can_subscribe=is_admin_request())
 
     @app.route("/edit/<edit_token>/gauges/add", methods=["POST"])
     def page_add_gauge(edit_token):
@@ -887,7 +893,8 @@ def register_routes(app):
             "page_edit.html", page=page, gauges=gauges, subscribers=subscribers,
             sites=sites, edit_token=edit_token, gauge_matches=gauge_matches,
             gauge_query=query, gauge_page=pageno, gauge_pages=pages,
-            gauge_total=total, sensitivity_options=SENSITIVITY_LABELS)
+            gauge_total=total, sensitivity_options=SENSITIVITY_LABELS,
+            can_subscribe=is_admin_request())
 
     @app.route("/edit/<edit_token>/gauges/remove", methods=["POST"])
     def page_remove_gauge(edit_token):
@@ -978,9 +985,10 @@ def register_routes(app):
     def page_subscribe(edit_token):
         """POST /edit/<edit_token>/subscribe — subscribe a recipient to the page's alerts.
 
-        Requires ``channel`` and ``channel_id`` (SMS/WhatsApp normalized to
-        E.164); adds the page subscriber and redirects to the editor. 404s on an
-        unknown token.
+        Maintainer only (Basic auth): an edit token must never let its holder
+        point alerts at someone else's chat or phone. Requires ``channel`` and
+        ``channel_id`` (SMS/WhatsApp normalized to E.164); adds the page
+        subscriber and redirects to the editor. 404s on an unknown token.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, add_page_subscriber
@@ -1005,7 +1013,8 @@ def register_routes(app):
         """POST /edit/<edit_token>/unsubscribe — change a page subscriber's status.
 
         Requires ``channel`` and ``channel_id``; sets the status (default
-        ``unsubscribed``) and redirects to the editor. 404s on an unknown token.
+        ``unsubscribed``; anything outside ``PAGE_SUBSCRIBER_STATUSES`` is a
+        400) and redirects to the editor. 404s on an unknown token.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, set_page_subscriber_status
@@ -1016,6 +1025,8 @@ def register_routes(app):
         channel = request.form.get("channel", "").strip()
         channel_id = request.form.get("channel_id", "").strip()
         new_status = request.form.get("status", "unsubscribed")
+        if new_status not in PAGE_SUBSCRIBER_STATUSES:
+            return "Unknown subscriber status.\n", 400
         if channel and channel_id:
             set_page_subscriber_status(page["id"], channel, channel_id, new_status, db_path)
             flash(f"Status updated to {new_status}.", "success")

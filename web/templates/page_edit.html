@@ -143,6 +143,9 @@
       </div>
     </div>
 
+    {# Hand-adding a recipient is maintainer-only: a public edit link must
+       never let its holder point alerts at someone else's chat or phone. #}
+    {% if can_subscribe %}
     <div class="card mb-3">
       <div class="card-header">Subscribe to Alerts</div>
       <div class="card-body">
@@ -166,6 +169,7 @@
         </form>
       </div>
     </div>
+    {% endif %}
 
     {% if subscribers %}
     <div class="card">
