@@ -924,7 +924,8 @@ def register_routes(app):
 
         A gauge new to the system is provisioned ``origin='user'`` so the
         retirement sweep switches it off once no live Page references it; an
-        existing gauge keeps its origin. Refused (flash) when the page already
+        existing gauge keeps its origin. A retired user-origin gauge is
+        reactivated; an admin gauge the maintainer switched off stays off. Refused (flash) when the page already
         has MAX_SOURCES_PER_PAGE sources; 429 past the per-visitor write limit.
         """
         from flask import abort

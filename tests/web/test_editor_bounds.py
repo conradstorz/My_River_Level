@@ -123,6 +123,22 @@ def test_editor_add_does_not_reenable_an_admin_site_switched_off(client, tmp_db,
     assert (site["origin"], site["active"]) == ("admin", 0)
 
 
+def test_editor_add_does_not_reenable_an_admin_gauge_switched_off(client, tmp_db, page):
+    get_or_create_noaa_gauge("MLUK2", "Admin off", 1, 2, 3, 4, tmp_db)    # admin origin
+    _row(tmp_db, "UPDATE noaa_gauges SET active=0 WHERE lid=%s", ("MLUK2",))
+    _add_gauge(client, page, "MLUK2")
+    gauge = _row(tmp_db, "SELECT origin, active FROM noaa_gauges WHERE lid=%s", ("MLUK2",))
+    assert (gauge["origin"], gauge["active"]) == ("admin", 0)
+
+
+def test_editor_readd_reactivates_a_retired_user_gauge(client, tmp_db, page):
+    get_or_create_noaa_gauge("MLUK2", "Retired", 1, 2, 3, 4, tmp_db, origin="user")
+    _row(tmp_db, "UPDATE noaa_gauges SET active=0 WHERE lid=%s", ("MLUK2",))
+    _add_gauge(client, page, "MLUK2")
+    gauge = _row(tmp_db, "SELECT origin, active FROM noaa_gauges WHERE lid=%s", ("MLUK2",))
+    assert (gauge["origin"], gauge["active"]) == ("user", 1)
+
+
 # --- per-Page cap ---------------------------------------------------------
 
 def _fill_page(tmp_db, page, n):

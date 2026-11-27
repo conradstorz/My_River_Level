@@ -442,8 +442,10 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
 
     Everything happens in one transaction so a failure part-way leaves the
     page as it was. Sources are inserted with origin='user'; an existing row
-    keeps its origin but is reactivated, so a gauge the retirement sweep
-    switched off comes back the moment someone selects it again.
+    keeps its origin. A retired user-origin row is reactivated, so a gauge
+    the retirement sweep switched off comes back the moment someone selects
+    it again; an admin row's active flag is never touched, so a source the
+    maintainer switched off stays off.
     """
     if sensitivity not in SENSITIVITY_LEVELS:
         raise ValueError(f"unknown sensitivity {sensitivity!r}")
@@ -464,7 +466,8 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
             cur.execute(
                 """INSERT INTO sites (site_number, station_name, parameter_code, origin, active)
                    VALUES (%s, %s, %s, 'user', 1)
-                   ON CONFLICT (site_number) DO UPDATE SET active = 1
+                   ON CONFLICT (site_number) DO UPDATE SET active = CASE
+                       WHEN sites.origin = 'user' THEN 1 ELSE sites.active END
                    RETURNING id""",
                 (site["site_number"], site.get("station_name", ""),
                  site.get("parameter_code", "00065"))
@@ -480,7 +483,8 @@ def save_pin(page_id, lat, lon, river_name, sensitivity, usgs_sites, noaa_gauges
                    (lid, station_name, action_stage, minor_flood_stage,
                     moderate_flood_stage, major_flood_stage, origin, active)
                    VALUES (%s, %s, %s, %s, %s, %s, 'user', 1)
-                   ON CONFLICT (lid) DO UPDATE SET active = 1
+                   ON CONFLICT (lid) DO UPDATE SET active = CASE
+                       WHEN noaa_gauges.origin = 'user' THEN 1 ELSE noaa_gauges.active END
                    RETURNING id""",
                 (gauge["lid"], gauge.get("station_name", ""),
                  gauge.get("action_stage"), gauge.get("minor_flood_stage"),
@@ -534,9 +538,11 @@ def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
                               origin="admin"):
     """Insert gauge if not present; return its id.
 
-    An existing gauge keeps its original origin but is reactivated: a user
-    re-selecting a gauge the retirement sweep switched off must get polling
-    back without admin help.
+    An existing gauge keeps its original origin. A retired user-origin gauge
+    is reactivated: a user re-selecting a gauge the retirement sweep switched
+    off must get polling back without admin help. An admin gauge's active
+    flag is never changed, so one the maintainer switched off stays off
+    whoever adds it.
     """
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -546,7 +552,8 @@ def get_or_create_noaa_gauge(lid, station_name, action_stage, minor_stage,
                (lid, station_name, action_stage, minor_flood_stage,
                 moderate_flood_stage, major_flood_stage, origin)
                VALUES (%s, %s, %s, %s, %s, %s, %s)
-               ON CONFLICT (lid) DO UPDATE SET active = 1""",
+               ON CONFLICT (lid) DO UPDATE SET active = CASE
+                   WHEN noaa_gauges.origin = 'user' THEN 1 ELSE noaa_gauges.active END""",
             (lid, station_name, action_stage, minor_stage, moderate_stage,
              major_stage, origin)
         )

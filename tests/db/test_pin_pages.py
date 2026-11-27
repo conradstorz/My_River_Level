@@ -174,6 +174,25 @@ def test_save_pin_keeps_admin_origin_on_existing_site(tmp_db):
     assert _row(tmp_db, "sites", site_number="03294500")["origin"] == "admin"
 
 
+def test_save_pin_never_reenables_admin_sources_switched_off(tmp_db):
+    conn = get_db(tmp_db)
+    cur = conn.cursor()
+    cur.execute("INSERT INTO sites (site_number, station_name, active) "
+                "VALUES ('03294500', 'Admin', 0)")
+    cur.execute("INSERT INTO noaa_gauges (lid, station_name, active) "
+                "VALUES ('MLUK2', 'Admin', 0)")
+    conn.commit()
+    cur.close()
+    conn.close()
+    page = create_pin_page(7, tmp_db)
+    save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, NOAA, tmp_db)
+    site = _row(tmp_db, "sites", site_number="03294500")
+    gauge = _row(tmp_db, "noaa_gauges", lid="MLUK2")
+    assert (site["origin"], site["active"]) == ("admin", 0)
+    assert (gauge["origin"], gauge["active"]) == ("admin", 0)
+    assert len(get_page_sites(page["id"], tmp_db)) == 1      # still linked
+
+
 def test_save_pin_stays_pending_without_owner(tmp_db):
     page = create_pin_page(None, tmp_db)
     save_pin(page["id"], 38.25, -85.75, "Ohio River", "unusual", USGS, [], tmp_db)

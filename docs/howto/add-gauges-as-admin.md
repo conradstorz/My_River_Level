@@ -88,7 +88,9 @@ many pages stop referencing it. A source added for the first time through a
 page editor (steps 6–7) is `user`-origin, like the ones a pin page
 provisions: it stays polled while any live page links it and is deactivated
 once none does. Adding an existing source from the editor never changes its
-origin, so add a USGS site on the Sites page first if it must never retire. See
+origin, so add a USGS site on the Sites page first if it must never retire.
+Nor does it switch back on an admin source you deactivated: only a retired
+`user`-origin source is reactivated by an editor add or a pin save. See
 [`../explanation/source-retirement.md`](../explanation/source-retirement.md).
 An admin page also has no owning Telegram chat and no lifecycle beyond its
 `active` flag — it is never `pending`, `paused`, or `stopped`, so it cannot
