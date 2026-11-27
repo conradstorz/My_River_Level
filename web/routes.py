@@ -89,11 +89,19 @@ GAUGE_SEARCH_VISITOR_LIMITER = RateLimiter(limit=30, per_seconds=3600)
 # adds; db.models enforces it atomically with the insert.
 
 
+#: Every limiter above; a new one must be added here so tests can reset it.
+LIMITERS = (
+    PIN_CREATE_LIMITER, DISCOVER_TOKEN_LIMITER, DISCOVER_IP_LIMITER,
+    PIN_SAVE_LIMITER, PIN_SAVE_VISITOR_LIMITER, DISCOVER_CONCURRENCY,
+    SOURCE_WRITE_CONCURRENCY, EDITOR_WRITE_VISITOR_LIMITER,
+    GAUGE_SEARCH_VISITOR_LIMITER,
+)
+
+
 def reset_limiters():
-    """Forget every hit and in-flight slot in this module's limiters (tests)."""
-    for value in list(globals().values()):
-        if isinstance(value, (RateLimiter, ConcurrencyLimiter)):
-            value.reset()
+    """Forget every hit and in-flight slot in LIMITERS (tests)."""
+    for limiter in LIMITERS:
+        limiter.reset()
 
 #: The subscriber statuses the public editor may set: only those that reduce
 #: delivery. Re-activating a subscriber (``active``) is maintainer-only, so an

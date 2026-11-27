@@ -86,3 +86,17 @@ def test_concurrency_limiter_forgets_idle_keys():
     cl.release("a")
     assert cl.in_flight("a") == 0
     assert cl.tracked_keys() == 0
+
+
+def test_route_limiter_registry_lists_every_limiter_and_resets_them():
+    from web import routes
+    found = {name for name, value in vars(routes).items()
+             if isinstance(value, (RateLimiter, ConcurrencyLimiter))}
+    registered = {name for name, value in vars(routes).items()
+                  if any(value is limiter for limiter in routes.LIMITERS)}
+    assert found == registered
+    routes.PIN_SAVE_LIMITER.allow("k")
+    routes.SOURCE_WRITE_CONCURRENCY.acquire("k")
+    routes.reset_limiters()
+    assert routes.PIN_SAVE_LIMITER.tracked_keys() == 0
+    assert routes.SOURCE_WRITE_CONCURRENCY.in_flight("k") == 0
