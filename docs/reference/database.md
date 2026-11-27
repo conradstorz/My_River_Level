@@ -15,7 +15,7 @@ Every table `init_db` creates, then the additive migrations it applies on every 
 | `last_success_at` | TIMESTAMPTZ (migration) | Timestamp of the most recent successful USGS fetch. | `db/models.py: record_site_fetch_success` |
 | `last_error` | TEXT NOT NULL DEFAULT '' (migration) | Most recent fetch-failure message; cleared on the next success. | `db/models.py: record_site_fetch_error`, `record_site_fetch_success` |
 | `last_error_at` | TIMESTAMPTZ (migration) | Timestamp of `last_error`. | `db/models.py: record_site_fetch_error` |
-| `origin` | TEXT NOT NULL DEFAULT 'admin' CHECK (`admin`, `user`) (migration) | `admin` = added on the portal Sites page; `user` = provisioned by the pin-onboarding flow or first added through a page editor, eligible for the retirement sweep. An existing row's origin is never changed; a pin save or editor add reactivates a retired `user` row but never changes an `admin` row's `active` flag. | `db/models.py: save_pin`, `web/routes.py: page_add_site` |
+| `origin` | TEXT NOT NULL DEFAULT 'admin' CHECK (`admin`, `user`) (migration) | `admin` = added on the portal Sites page; `user` = provisioned by the pin-onboarding flow or first added through a page editor, eligible for the retirement sweep. An existing row's origin is never changed; a pin save or editor add reactivates a retired `user` row but never changes an `admin` row's `active` flag. | `db/models.py: save_pin`, `add_page_site` (via `web/routes.py: page_add_site`) |
 
 ## `settings`
 
@@ -108,15 +108,15 @@ Row is recorded on every `/start` so the portal can see who has met the bot, and
 | `quality_checked_at` | TIMESTAMPTZ (migration) | | `ForecastPollingThread` (`set_gauge_quality`) |
 | `has_forecast` | BOOLEAN (migration) | Deliberate tri-state: `TRUE` = NOAA publishes a forecast, `FALSE` = NOAA positively confirmed it does not, `NULL` = never successfully checked. `NULL` must never collapse into `FALSE`, or a failed fetch would wrongly claim the gauge has no forecast. | `ForecastPollingThread` (`set_gauge_forecast_availability`) |
 | `forecast_checked_at` | TIMESTAMPTZ (migration) | | `ForecastPollingThread` (`set_gauge_forecast_availability`) |
-| `origin` | TEXT NOT NULL DEFAULT 'admin' CHECK (`admin`, `user`) (migration) | `admin` = added through a page editor before editor adds became `user`-origin, or by operator tooling using `get_or_create_noaa_gauge`'s default; `user` = provisioned by the pin-onboarding flow or first added through a page editor, eligible for the retirement sweep. An existing row's origin is never changed; `save_pin` and `get_or_create_noaa_gauge` reactivate a retired `user` row but never change an `admin` row's `active` flag. | `db/models.py: save_pin`, `web/routes.py: page_add_gauge` |
+| `origin` | TEXT NOT NULL DEFAULT 'admin' CHECK (`admin`, `user`) (migration) | `admin` = added through a page editor before editor adds became `user`-origin, or by operator tooling using `get_or_create_noaa_gauge`'s default; `user` = provisioned by the pin-onboarding flow or first added through a page editor, eligible for the retirement sweep. An existing row's origin is never changed; `save_pin` and `get_or_create_noaa_gauge` reactivate a retired `user` row but never change an `admin` row's `active` flag. | `db/models.py: save_pin`, `add_page_gauge` (via `web/routes.py: page_add_gauge`) |
 | `active` | INTEGER NOT NULL DEFAULT 1 (migration) | 0/1 flag; `NoaaPollingThread` and `ForecastPollingThread` only act on gauges where this is 1. | `monitor/retirement.py: sweep` |
 
 ## `page_noaa_gauges`
 
 | column | type | meaning | written by |
 |---|---|---|---|
-| `page_id` | INTEGER NOT NULL REFERENCES user_pages(id) | Composite primary key with `noaa_gauge_id`. | `db/models.py: link_page_gauge`, `save_pin` |
-| `noaa_gauge_id` | INTEGER NOT NULL REFERENCES noaa_gauges(id) | | `db/models.py: link_page_gauge`, `unlink_page_gauge`, `save_pin` |
+| `page_id` | INTEGER NOT NULL REFERENCES user_pages(id) | Composite primary key with `noaa_gauge_id`. | `db/models.py: link_page_gauge`, `add_page_gauge`, `save_pin` |
+| `noaa_gauge_id` | INTEGER NOT NULL REFERENCES noaa_gauges(id) | | `db/models.py: link_page_gauge`, `add_page_gauge`, `unlink_page_gauge`, `save_pin` |
 
 ## `page_subscribers`
 
@@ -134,8 +134,8 @@ Row is recorded on every `/start` so the portal can see who has met the bot, and
 
 | column | type | meaning | written by |
 |---|---|---|---|
-| `page_id` | INTEGER NOT NULL REFERENCES user_pages(id) | Composite primary key with `site_id`. Site alerts route only to pages that link the site here. | `db/models.py: link_page_site`, `save_pin` |
-| `site_id` | INTEGER NOT NULL REFERENCES sites(id) | | `db/models.py: link_page_site`, `unlink_page_site`, `save_pin` |
+| `page_id` | INTEGER NOT NULL REFERENCES user_pages(id) | Composite primary key with `site_id`. Site alerts route only to pages that link the site here. | `db/models.py: link_page_site`, `add_page_site`, `save_pin` |
+| `site_id` | INTEGER NOT NULL REFERENCES sites(id) | | `db/models.py: link_page_site`, `add_page_site`, `unlink_page_site`, `save_pin` |
 
 ## `noaa_observations`
 
