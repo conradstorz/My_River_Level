@@ -99,6 +99,49 @@ def test_fetch_gauge_metadata_dict_categories_and_lid():
     assert meta["major_flood_stage"] == 38.0
 
 
+def test_fetch_gauge_metadata_placeholder_thresholds_become_none():
+    # NWPS fills undefined flood categories with -9999 (MLXK2, Louisville
+    # Water Tower). Stored as real numbers they made every stage "Major".
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.json.return_value = {
+        "lid": "MLXK2", "name": "Ohio River at Louisville Water Tower",
+        "flood": {"categories": {
+            "major":    {"stage": -9999, "flow": -9999},
+            "moderate": {"stage": -9999, "flow": -9999},
+            "minor":    {"stage": -999.0, "flow": -9999},
+            "action":   {"stage": None},
+        }},
+    }
+    with patch("monitor.noaa_client.requests.get", return_value=mock):
+        meta = fetch_gauge_metadata("MLXK2")
+    assert meta["action_stage"] is None
+    assert meta["minor_flood_stage"] is None
+    assert meta["moderate_flood_stage"] is None
+    assert meta["major_flood_stage"] is None
+    assert classify_noaa_condition(
+        13.09, meta["action_stage"], meta["minor_flood_stage"],
+        meta["moderate_flood_stage"], meta["major_flood_stage"]) == "Normal"
+
+
+def test_fetch_gauge_metadata_keeps_real_thresholds_beside_placeholders():
+    mock = MagicMock()
+    mock.status_code = 200
+    mock.json.return_value = {
+        "lid": "X", "name": "X",
+        "flood": {"categories": [
+            {"name": "action", "stage": 0.0},
+            {"name": "minor", "stage": 12.5},
+            {"name": "major", "stage": -9999},
+        ]},
+    }
+    with patch("monitor.noaa_client.requests.get", return_value=mock):
+        meta = fetch_gauge_metadata("X")
+    assert meta["action_stage"] == 0.0
+    assert meta["minor_flood_stage"] == 12.5
+    assert meta["major_flood_stage"] is None
+
+
 def test_fetch_gauge_metadata_none_identifier_returns_none():
     # A None/non-string identifier must degrade to None, never raise.
     assert fetch_gauge_metadata(None) is None

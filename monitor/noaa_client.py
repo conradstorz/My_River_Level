@@ -36,6 +36,19 @@ def classify_noaa_condition(stage, action_stage, minor_stage, moderate_stage, ma
     return "Normal"
 
 
+# NWPS fills a flood category it does not define with a large negative
+# sentinel (-9999, sometimes -999) instead of null. No river stage threshold
+# is that low, so anything at or below this is "no threshold".
+_PLACEHOLDER_STAGE = -999
+
+
+def _threshold_or_none(stage):
+    """Return a flood-category stage, or None when NWPS published a placeholder."""
+    if stage is None or stage <= _PLACEHOLDER_STAGE:
+        return None
+    return stage
+
+
 def fetch_gauge_metadata(identifier, timeout=TIMEOUT):
     """
     Fetch station name, canonical LID, and flood thresholds from NWPS.
@@ -83,7 +96,7 @@ def fetch_gauge_metadata(identifier, timeout=TIMEOUT):
     for cat in items:
         name = (cat.get("name") or "").lower()
         if name in key_map:
-            thresholds[key_map[name]] = cat.get("stage")
+            thresholds[key_map[name]] = _threshold_or_none(cat.get("stage"))
 
     return {
         "station_name": data.get("name", identifier),
