@@ -19,4 +19,4 @@ Commands the bot understands; a chat owns at most one live pin page.
 
 Replies that need a link require `public_base_url`; the bot stores its own username in `telegram_bot_username` at startup for the `/start` deep link.
 
-Verified against commit 20c729b
+Verified against commit 07531ac

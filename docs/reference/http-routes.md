@@ -78,4 +78,4 @@ Neither Basic auth, a URL token, nor a provider signature.
 - A page name (`POST /pages/new`) or river name (`POST /pin/<edit_token>/save`) must be text of at most 100 characters after trimming; anything else is a 400 with a message.
 - Every response, errors included, carries `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`.
 
-Verified against commit 20c729b
+Verified against commit 07531ac
