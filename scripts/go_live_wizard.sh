@@ -218,7 +218,7 @@ PUBLIC_URL="https://river.ohr3023.org"
 # An empty TUNNEL_TOKEN (as in the tunnel's .env.example) and this literal
 # placeholder both mean "not set yet"; neither is offered as the current value.
 PLACEHOLDER_TOKEN="placeholder-token"
-PATH_REGEX='^/(pin(/.*)?|view/.+|edit/.+|pages/new|static/.+|healthz)$'
+PATH_REGEX='^/(pin(/.*)?|view/.+|edit/.+|static/.+|healthz)$'
 CF_DASHBOARD="https://one.dash.cloudflare.com/"
 BOT_USERNAME=""
 SMOKE_RESULT="not run"
@@ -237,7 +237,8 @@ Walks you through taking River Monitor public at $PUBLIC_URL:
   2  tunnel repo: private GitHub remote, pushed (re-pushes if origin is behind)
   3  docker network public-edge on the Docker host (skipped if present)
   4  Cloudflare: create the tunnel, save TUNNEL_TOKEN to the tunnel .env
-  5  Cloudflare: add the river.ohr3023.org route (path regex) + check 404 catch-all
+  5  Cloudflare: add the river.ohr3023.org route (path regex) + check 404 catch-all;
+     confirm edge settings (Always Use HTTPS, HSTS, rate-limit rule)
   6  TRUSTED_PROXY_COUNT=1 in River's .env
   7  rebuild and recreate River from main, wait for healthy
   8  BotFather token + public_base_url into River's Settings (never echoed)
@@ -551,6 +552,14 @@ else
     SKIPPED+=("Cloudflare route for river.ohr3023.org (see the tunnel README)")
     warn "Recorded as still to do; the smoke check will fail until it's done."
   fi
+fi
+say "Edge settings for ohr3023.org (docs/howto/this-deployment.md, 'Cloudflare edge settings'):"
+step "SSL/TLS → Edge Certificates: Always Use HTTPS on; HSTS enabled."
+step "Security → WAF → Rate limiting rules: one rule on river.ohr3023.org paths"
+step "starting /pin or /edit/ (block or challenge above a per-IP rate)."
+if ! confirm "Always Use HTTPS, HSTS and the rate-limit rule are in place?"; then
+  SKIPPED+=("Cloudflare edge settings: Always Use HTTPS, HSTS, rate-limit rule on /pin* and /edit/*")
+  warn "Recorded as still to do."
 fi
 pause
 

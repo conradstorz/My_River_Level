@@ -263,6 +263,35 @@ def test_unsubscribe_from_page(client):
     assert get_active_page_subscribers(page["id"], db_path) == []
 
 
+def test_unsubscribe_works_without_admin_auth(client):
+    from db.models import (create_user_page, get_page_by_edit_token,
+                           add_page_subscriber, get_active_page_subscribers)
+    db_path = client.application.config["DB_PATH"]
+    _, edit = create_user_page("Test", db_path)
+    page = get_page_by_edit_token(edit, db_path)
+    add_page_subscriber(page["id"], "telegram", "12345678", "Alice", db_path)
+    resp = _anon(client).post(f"/edit/{edit}/unsubscribe",
+                              data={"channel": "telegram", "channel_id": "12345678"})
+    assert resp.status_code == 302
+    assert get_active_page_subscribers(page["id"], db_path) == []
+
+
+@pytest.mark.parametrize("bad", ["deleted", "ACTIVE", "", "pending"])
+def test_unsubscribe_rejects_unknown_status(client, bad):
+    from db.models import (create_user_page, get_page_by_edit_token,
+                           add_page_subscriber, get_active_page_subscribers)
+    db_path = client.application.config["DB_PATH"]
+    _, edit = create_user_page("Test", db_path)
+    page = get_page_by_edit_token(edit, db_path)
+    add_page_subscriber(page["id"], "telegram", "12345678", "Alice", db_path)
+    resp = _anon(client).post(f"/edit/{edit}/unsubscribe",
+                              data={"channel": "telegram", "channel_id": "12345678",
+                                    "status": bad})
+    assert resp.status_code == 400
+    subs = get_active_page_subscribers(page["id"], db_path)
+    assert [s["channel_id"] for s in subs] == ["12345678"]
+
+
 def test_admin_pages_list(client):
     from db.models import create_user_page
     db_path = client.application.config["DB_PATH"]

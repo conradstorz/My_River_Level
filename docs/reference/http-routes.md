@@ -11,7 +11,9 @@ Guarded by HTTP Basic auth (`web/auth.py`); endpoint names here are not in `PUBL
 | GET | `/` | admin | Render the dashboard with active sites' latest conditions and the 20 most recent notifications. | — |
 | GET | `/admin/pages` | admin | List all landing pages with gauge and active-subscriber counts. | — |
 | POST | `/admin/pages/<int:page_id>/toggle` | admin | Flip a page's active flag and redirect to the admin list. | — |
+| POST | `/edit/<edit_token>/subscribe` | admin | Subscribe a recipient to a page's alerts; the page editor shows this form only to the maintainer. | — |
 | GET, POST | `/broadcast` | admin | View the broadcast form, or queue a broadcast message to selected channels. | — |
+| GET, POST | `/pages/new` | admin | View the page-creation form (GET), or create a public landing page (POST). | — |
 | GET, POST | `/settings` | admin | Redirect to the first settings sub-page. | — |
 | GET, POST | `/settings/<slug>` | admin | View or save one group of settings. | — |
 | GET | `/sites` | admin | List every monitored site, with health, plus the add/search forms. | — |
@@ -36,8 +38,7 @@ Guarded by an unguessable `public_token` or `edit_token` in the URL, not by Basi
 | POST | `/edit/<edit_token>/sensitivity` | token | Set how much this page hears about. | — |
 | POST | `/edit/<edit_token>/sites/add` | token | Attach a USGS river gauge to the page. | — |
 | POST | `/edit/<edit_token>/sites/remove` | token | Detach a USGS gauge from the page. | — |
-| POST | `/edit/<edit_token>/subscribe` | token | Subscribe a recipient to the page's alerts. | — |
-| POST | `/edit/<edit_token>/unsubscribe` | token | Change a page subscriber's status. | — |
+| POST | `/edit/<edit_token>/unsubscribe` | token | Change a page subscriber's status (`active`, `paused` or `unsubscribed`; anything else 400). | — |
 | GET | `/view/<public_token>` | token | Render a public landing page, or 404 if missing/inactive. | — |
 
 ## Pin onboarding (token)
@@ -67,7 +68,6 @@ Neither Basic auth, a URL token, nor a provider signature.
 | method | path | auth | purpose | rate limit |
 |---|---|---|---|---|
 | GET | `/healthz` | open | 200 when every registered thread is alive, else 503. | — |
-| GET, POST | `/pages/new` | open | View the page-creation form (GET), or create a public landing page (POST). | — |
 | GET | `/pin` | open | Web-first entry: create a pending page and open its map. | 10 per IP per day |
 
 ## Applies to every route
