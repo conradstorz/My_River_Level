@@ -11,8 +11,8 @@ so the confirm screen is never empty for a bad reason. NLDI publishes no
 GNIS river name on either its position or comid endpoint, so the river
 name is instead derived from the names of the gauges found on the stem.
 
-NOAA gauges have no NLDI layer. Each proposed USGS site is looked up on the
-NWPS per-gauge endpoint (it resolves a USGS number to its LID), so a matched
+NOAA gauges have no NLDI layer. Each proposed USGS site (the nearest
+MAX_NOAA_PAIRING_LOOKUPS of them) is looked up on the NWPS per-gauge endpoint (it resolves a USGS number to its LID), so a matched
 NOAA gauge inherits the site's upstream/downstream tag; the NWPS bounding-box
 listing then adds any other gauges in range as "nearby". The listing itself
 publishes no usgsId, which is why the match goes through the per-gauge call.
@@ -40,6 +40,9 @@ TIMEOUT = 15
 SNAP_MAX_KM = 2.0
 #: Parameters a site must report to be worth proposing; first match wins.
 WANTED_PARAMETERS = ("00065", "00060")
+#: At most this many proposed USGS sites (the nearest) get an NWPS per-gauge
+#: lookup to pair them with a NOAA gauge, bounding one discovery's fan-out.
+MAX_NOAA_PAIRING_LOOKUPS = 10
 
 #: Text that separates a river name from the location description that
 #: follows it in a USGS station name or NWPS gauge name, e.g. "OHIO RIVER
@@ -271,8 +274,13 @@ def discover(lat, lon, *, reach_km, fallback_radius_miles):
     # NOAA gauges that share a proposed USGS site inherit its tag. NWPS
     # resolves a USGS number on its per-gauge endpoint; the listing does not
     # publish usgsId, so this is the only reliable way to pair them.
+    # Each lookup is a synchronous NWPS call on a web thread, so only the
+    # nearest MAX_NOAA_PAIRING_LOOKUPS sites are paired; the rest are still
+    # proposed as USGS candidates, and the bounding-box listing below still
+    # finds NOAA gauges near the pin.
     matched = {}
-    for c in list(candidates):
+    nearest = sorted(candidates, key=lambda c: c.distance_km)[:MAX_NOAA_PAIRING_LOOKUPS]
+    for c in nearest:
         try:
             meta = fetch_gauge_metadata(c.id)
         except Exception as exc:

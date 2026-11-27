@@ -1,4 +1,4 @@
-from web.ratelimit import RateLimiter
+from web.ratelimit import ConcurrencyLimiter, RateLimiter, client_key
 
 
 def test_allows_up_to_limit_then_refuses():
@@ -47,3 +47,42 @@ def test_prune_keeps_keys_with_live_hits():
     assert rl.tracked_keys() == 2
     assert rl.allow("live", now=17) is False  # its hit at t=15 survived
 
+
+# ── Visitor keys ────────────────────────────────────────────────────────────
+
+def test_ipv4_key_is_the_address():
+    assert client_key("203.0.113.5") == "203.0.113.5"
+    assert client_key("203.0.113.5") != client_key("203.0.113.6")
+
+
+def test_ipv6_addresses_in_one_slash64_share_a_key():
+    assert client_key("2001:db8:1:2::1") == client_key("2001:db8:1:2:ffff::9")
+    assert client_key("2001:db8:1:2::1") != client_key("2001:db8:1:3::1")
+
+
+def test_ipv4_mapped_ipv6_keys_on_the_ipv4_address():
+    assert client_key("::ffff:203.0.113.5") == "203.0.113.5"
+    assert client_key("::ffff:203.0.113.5") != client_key("::ffff:203.0.113.6")
+
+
+def test_unparseable_address_is_used_verbatim():
+    assert client_key("unknown") == "unknown"
+
+
+# ── Concurrency limiter ─────────────────────────────────────────────────────
+
+def test_concurrency_limiter_caps_in_flight_per_key():
+    cl = ConcurrencyLimiter(max_in_flight=2)
+    assert cl.acquire("a") and cl.acquire("a")
+    assert cl.acquire("a") is False
+    assert cl.acquire("b") is True
+    cl.release("a")
+    assert cl.acquire("a") is True
+
+
+def test_concurrency_limiter_forgets_idle_keys():
+    cl = ConcurrencyLimiter(max_in_flight=1)
+    cl.acquire("a")
+    cl.release("a")
+    assert cl.in_flight("a") == 0
+    assert cl.tracked_keys() == 0

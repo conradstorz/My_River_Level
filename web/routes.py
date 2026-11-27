@@ -35,7 +35,7 @@ from monitor.search_cache import get_or_compute
 from monitor.noaa_search import search_noaa_gauges_by_name
 from monitor.gauge_quality import split_quality_detail
 from monitor.pin_discovery import discover
-from web.ratelimit import RateLimiter
+from web.ratelimit import ConcurrencyLimiter, RateLimiter, client_key
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +67,24 @@ PIN_CREATE_LIMITER = RateLimiter(limit=10, per_seconds=86400)
 DISCOVER_TOKEN_LIMITER = RateLimiter(limit=20, per_seconds=3600)
 DISCOVER_IP_LIMITER = RateLimiter(limit=60, per_seconds=3600)
 PIN_SAVE_LIMITER = RateLimiter(limit=10, per_seconds=3600)
+# Keyed by visitor, not token: minting fresh pin pages must not reset it.
+PIN_SAVE_VISITOR_LIMITER = RateLimiter(limit=30, per_seconds=3600)
+# Each discovery holds a waitress thread for several upstream calls, so one
+# visitor may only have this many in flight at once.
+DISCOVER_CONCURRENCY = ConcurrencyLimiter(max_in_flight=2)
 
-# A pin page's sources come from a visitor-driven discovery search, not an
-# admin form, so the count needs an upper bound independent of what the map
-# UI happens to send.
-MAX_PIN_SOURCES = 30
+#: The most USGS sites + NOAA gauges one Page may reference. Enforced on pin
+#: save (which replaces a Page's sources) and on public Page editor adds; it
+#: bounds both the save-time verification fan-out and what one Page can make
+#: the pollers fetch.
+MAX_SOURCES_PER_PAGE = 20
+
+
+def reset_limiters():
+    """Forget every hit and in-flight slot in this module's limiters (tests)."""
+    for value in list(globals().values()):
+        if isinstance(value, (RateLimiter, ConcurrencyLimiter)):
+            value.reset()
 
 SENSITIVITY_LABELS = [
     ("floods", "Floods only",
@@ -105,8 +118,13 @@ def _parse_coordinates(payload):
     return lat, lon
 
 
-def _client_ip():
-    return request.remote_addr or "unknown"
+def visitor_key():
+    """Rate-limit key for the current request's visitor.
+
+    Built on the ProxyFix-resolved ``remote_addr`` (see ``web/app.py``) and
+    folded by ``client_key`` so an IPv6 visitor is keyed by its /64.
+    """
+    return client_key(request.remote_addr or "unknown")
 
 
 def _float_setting(key, default, db_path):
@@ -661,15 +679,23 @@ def register_routes(app):
     @app.route("/pin")
     def pin_start():
         """GET /pin — web-first entry: create a pending page and open its map."""
-        if not PIN_CREATE_LIMITER.allow(_client_ip()):
+        if not PIN_CREATE_LIMITER.allow(visitor_key()):
             return "Too many new pages from this address today.\n", 429
         db_path = current_app.config["DB_PATH"]
         page = create_pin_page(None, db_path)
         return redirect(url_for("pin_map", edit_token=page["edit_token"]))
 
     def _pin_page_or_abort(edit_token):
+        """Return the Pin page for `edit_token`, or abort.
+
+        Only Pin pages are served: bound to a Telegram chat, or still
+        `pending`. An admin-created Page's token is 404 here, whatever its
+        status, so the pin flow cannot be driven against it.
+        """
         page = get_page_by_edit_token(edit_token, current_app.config["DB_PATH"])
         if not page:
+            abort(404)
+        if page["owner_chat_id"] is None and page["status"] != "pending":
             abort(404)
         if page["status"] == "stopped":
             abort(410)
@@ -684,6 +710,7 @@ def register_routes(app):
             "pin.html", page=page, edit_token=edit_token,
             sensitivity_options=SENSITIVITY_LABELS,
             bot_link=bot_deep_link(edit_token, db_path),
+            max_sources=MAX_SOURCES_PER_PAGE,
         )
 
     @app.route("/pin/<edit_token>/discover", methods=["POST"])
@@ -691,23 +718,29 @@ def register_routes(app):
         """POST /pin/<edit_token>/discover — propose gauges for a lat/lon."""
         db_path = current_app.config["DB_PATH"]
         _pin_page_or_abort(edit_token)
-        if not DISCOVER_TOKEN_LIMITER.allow(edit_token) or not DISCOVER_IP_LIMITER.allow(_client_ip()):
+        visitor = visitor_key()
+        if not DISCOVER_TOKEN_LIMITER.allow(edit_token) or not DISCOVER_IP_LIMITER.allow(visitor):
             return jsonify({"error": "Too many searches; please wait a while."}), 429
-        coords = _parse_coordinates(request.get_json(silent=True))
-        if coords is None:
-            return jsonify({"error": "lat and lon must be valid coordinates."}), 400
-        reach_km = _float_setting("discovery_reach_km", 50.0, db_path)
-        radius = _float_setting("search_radius_miles", 25.0, db_path)
-        result = discover(coords[0], coords[1], reach_km=reach_km,
-                          fallback_radius_miles=radius)
-        return jsonify(result.to_dict())
+        if not DISCOVER_CONCURRENCY.acquire(visitor):
+            return jsonify({"error": "A search is already running; please wait for it."}), 429
+        try:
+            coords = _parse_coordinates(request.get_json(silent=True))
+            if coords is None:
+                return jsonify({"error": "lat and lon must be valid coordinates."}), 400
+            reach_km = _float_setting("discovery_reach_km", 50.0, db_path)
+            radius = _float_setting("search_radius_miles", 25.0, db_path)
+            result = discover(coords[0], coords[1], reach_km=reach_km,
+                              fallback_radius_miles=radius)
+            return jsonify(result.to_dict())
+        finally:
+            DISCOVER_CONCURRENCY.release(visitor)
 
     @app.route("/pin/<edit_token>/save", methods=["POST"])
     def pin_save(edit_token):
         """POST /pin/<edit_token>/save — store the pin and provision its sources."""
         db_path = current_app.config["DB_PATH"]
         page = _pin_page_or_abort(edit_token)
-        if not PIN_SAVE_LIMITER.allow(edit_token):
+        if not PIN_SAVE_LIMITER.allow(edit_token) or not PIN_SAVE_VISITOR_LIMITER.allow(visitor_key()):
             return jsonify({"error": "Too many saves; please wait a while."}), 429
         payload = request.get_json(silent=True) or {}
         coords = _parse_coordinates(payload)
@@ -719,8 +752,10 @@ def register_routes(app):
         sources = payload.get("sources") or []
         if not isinstance(sources, list) or not sources:
             return jsonify({"error": "Choose at least one source."}), 400
-        if len(sources) > MAX_PIN_SOURCES:
-            return jsonify({"error": "Too many sources; choose at most 30."}), 400
+        if len(sources) > MAX_SOURCES_PER_PAGE:
+            return jsonify({"error": (
+                f"Too many sources: a page can follow at most {MAX_SOURCES_PER_PAGE} "
+                f"gauges (you chose {len(sources)}). Untick some and save again.")}), 400
 
         usgs_sites, noaa_gauges, skipped = [], [], []
         for src in sources:

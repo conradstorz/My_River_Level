@@ -43,7 +43,17 @@ The pin routes are the one place an anonymous visitor's click triggers real
 third-party API calls (NLDI, NWPS, USGS), so `web/ratelimit.py`'s
 `RateLimiter` throttles them: 10 new pending pages per IP per day, 20
 discovery searches per token and 60 per IP per hour, and 10 saves per token
-per hour. It is explicitly an in-process, per-container brake, not a
+plus 30 per IP per hour (the per-IP limit stops a visitor bypassing the
+per-token one by minting fresh pages). A `ConcurrencyLimiter` lets one IP
+have at most 2 discovery searches in flight, so a few slow searches cannot
+occupy every waitress thread, and each search pairs at most the nearest 10
+USGS sites with NOAA gauges. A save may choose at most
+`MAX_SOURCES_PER_PAGE` (20) sources, checked before any of them is verified.
+The pin routes serve only Pin pages — bound to a Telegram chat, or still
+`pending` — so an admin-created page's token cannot be driven through them.
+An IPv6 visitor is keyed by its /64 (`client_key`), since one subscriber
+typically holds a whole /64 and could otherwise rotate addresses to reset
+every limit. It is explicitly an in-process, per-container brake, not a
 distributed quota — good enough to stop one browser hammering an upstream
 API, not a guarantee across multiple app replicas. What counts as "an IP" for
 these limits depends on `TRUSTED_PROXY_COUNT`: with it at the default of 0,

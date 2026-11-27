@@ -102,11 +102,14 @@
     // escape everything before it goes into markup.
     const esc = s => String(s).replace(/[&<>"']/g, ch => (
       {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[ch]));
-    for (const c of data.candidates) {
+    // The server refuses a save with more than this many sources, so only
+    // the first (nearest, best-tagged) ones start ticked.
+    const maxSources = {{ max_sources|tojson }};
+    for (const [i, c] of data.candidates.entries()) {
       const li = document.createElement('li');
       li.className = 'list-group-item';
       li.innerHTML = `<label class="d-flex gap-2 align-items-start mb-0">
-        <input type="checkbox" class="form-check-input mt-1" checked
+        <input type="checkbox" class="form-check-input mt-1" ${i < maxSources ? 'checked' : ''}
                data-kind="${esc(c.kind)}" data-id="${esc(c.id)}" data-param="${esc(c.parameter_code || '')}">
         <span><strong>${esc(c.name)}</strong>
           <span class="text-muted small">${esc(c.kind.toUpperCase())} ${esc(c.id)} · ${esc(c.distance_km)} km</span>

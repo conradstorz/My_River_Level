@@ -42,13 +42,13 @@ Guarded by an unguessable `public_token` or `edit_token` in the URL, not by Basi
 
 ## Pin onboarding (token)
 
-Also guarded by `edit_token` in the URL; additionally throttled because each call can trigger third-party API lookups.
+Also guarded by `edit_token` in the URL; additionally throttled because each call can trigger third-party API lookups. Only Pin pages are served — a page bound to a Telegram chat, or one still `pending`; an admin-created page's token returns 404 on every route here. "Per IP" means per visitor key: an IPv4 address, or an IPv6 address's /64.
 
 | method | path | auth | purpose | rate limit |
 |---|---|---|---|---|
 | GET | `/pin/<edit_token>` | token | The map screen. | — |
-| POST | `/pin/<edit_token>/discover` | token | Propose USGS/NOAA gauges for a lat/lon. | 20 per token and 60 per IP per hour |
-| POST | `/pin/<edit_token>/save` | token | Store the pin and provision its sources. | 10 per token per hour, max 30 sources |
+| POST | `/pin/<edit_token>/discover` | token | Propose USGS/NOAA gauges for a lat/lon (NOAA pairing looked up for the nearest 10 USGS sites). | 20 per token and 60 per IP per hour; at most 2 in flight per IP (429 beyond) |
+| POST | `/pin/<edit_token>/save` | token | Store the pin and provision its sources. | 10 per token and 30 per IP per hour; max 20 sources (400 beyond) |
 
 ## Webhooks (signature)
 
@@ -68,6 +68,6 @@ Neither Basic auth, a URL token, nor a provider signature.
 |---|---|---|---|---|
 | GET | `/healthz` | open | 200 when every registered thread is alive, else 503. | — |
 | GET, POST | `/pages/new` | open | View the page-creation form (GET), or create a public landing page (POST). | — |
-| GET | `/pin` | open | Web-first entry: create a pending page and open its map. | 10 per IP per day |
+| GET | `/pin` | open | Web-first entry: create a pending page and open its map. | 10 per IP (IPv6: per /64) per day |
 
 Verified against commit 20c729b
