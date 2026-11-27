@@ -23,7 +23,7 @@ from flask import (render_template, current_app, request, redirect, url_for,
 from twilio.request_validator import RequestValidator
 from db.models import (get_db, get_setting, set_setting, get_sites_with_health,
                        create_pin_page, get_page_by_edit_token, save_pin,
-                       SENSITIVITY_LEVELS)
+                       PAGE_SUBSCRIBER_STATUSES, SENSITIVITY_LEVELS)
 from version import VERSION, RELEASE_DATE
 from monitor.site_validation import validate_usgs_site
 from monitor.site_search import search_sites_by_name
@@ -92,9 +92,10 @@ def reset_limiters():
         if isinstance(value, (RateLimiter, ConcurrencyLimiter)):
             value.reset()
 
-# The values the page_subscribers.status CHECK constraint allows; the public
-# unsubscribe route accepts nothing else.
-PAGE_SUBSCRIBER_STATUSES = ("active", "paused", "unsubscribed")
+#: The subscriber statuses the public editor may set: only those that reduce
+#: delivery. Re-activating a subscriber (``active``) is maintainer-only, so an
+#: edit token cannot re-subscribe someone who left.
+PUBLIC_SUBSCRIBER_STATUSES = ("paused", "unsubscribed")
 
 SENSITIVITY_LABELS = [
     ("floods", "Floods only",
@@ -1132,11 +1133,13 @@ def register_routes(app):
 
     @app.route("/edit/<edit_token>/unsubscribe", methods=["POST"])
     def page_unsubscribe(edit_token):
-        """POST /edit/<edit_token>/unsubscribe — change a page subscriber's status.
+        """POST /edit/<edit_token>/unsubscribe — pause or remove a page subscriber.
 
         Requires ``channel`` and ``channel_id``; sets the status (default
-        ``unsubscribed``; anything outside ``PAGE_SUBSCRIBER_STATUSES`` is a
-        400) and redirects to the editor. 404s on an unknown token.
+        ``unsubscribed``) and redirects to the editor. Only the statuses that
+        reduce delivery (``PUBLIC_SUBSCRIBER_STATUSES``) are accepted;
+        anything else, ``active`` included, is a 400, since re-activating a
+        subscriber is maintainer-only. 404s on an unknown token.
         """
         from flask import abort
         from db.models import get_page_by_edit_token, set_page_subscriber_status
@@ -1149,7 +1152,7 @@ def register_routes(app):
         channel = request.form.get("channel", "").strip()
         channel_id = request.form.get("channel_id", "").strip()
         new_status = request.form.get("status", "unsubscribed")
-        if new_status not in PAGE_SUBSCRIBER_STATUSES:
+        if new_status not in PUBLIC_SUBSCRIBER_STATUSES:
             return "Unknown subscriber status.\n", 400
         if channel and channel_id:
             set_page_subscriber_status(page["id"], channel, channel_id, new_status, db_path)

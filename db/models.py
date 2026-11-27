@@ -303,6 +303,8 @@ def get_page_by_edit_token(token, db_path=None):
 
 SENSITIVITY_LEVELS = ("floods", "unusual", "all")
 PAGE_STATUSES = ("pending", "active", "paused", "stopped")
+#: The values the page_subscribers.status CHECK constraint allows.
+PAGE_SUBSCRIBER_STATUSES = ("active", "paused", "unsubscribed")
 PIN_PAGE_NAME = "My river"
 
 
@@ -688,7 +690,12 @@ def add_page_subscriber(page_id, channel, channel_id, display_name, db_path=None
 
 
 def set_page_subscriber_status(page_id, channel, channel_id, status, db_path=None):
-    """Update the status ('active', 'paused', or 'unsubscribed') of a page subscriber."""
+    """Update the status ('active', 'paused', or 'unsubscribed') of a page subscriber.
+
+    ValueError on a status outside PAGE_SUBSCRIBER_STATUSES.
+    """
+    if status not in PAGE_SUBSCRIBER_STATUSES:
+        raise ValueError(f"unknown subscriber status {status!r}")
     conn = get_conn(db_path)
     cur = conn.cursor()
     try:

@@ -292,6 +292,38 @@ def test_unsubscribe_rejects_unknown_status(client, bad):
     assert [s["channel_id"] for s in subs] == ["12345678"]
 
 
+@pytest.mark.parametrize("auth", [False, True])
+def test_public_unsubscribe_route_cannot_resubscribe(client, auth):
+    """Someone who left must not be re-subscribed through an edit token."""
+    from db.models import (create_user_page, get_page_by_edit_token,
+                           add_page_subscriber, get_active_page_subscribers,
+                           set_page_subscriber_status)
+    db_path = client.application.config["DB_PATH"]
+    _, edit = create_user_page("Test", db_path)
+    page = get_page_by_edit_token(edit, db_path)
+    add_page_subscriber(page["id"], "telegram", "12345678", "Alice", db_path)
+    set_page_subscriber_status(page["id"], "telegram", "12345678", "unsubscribed", db_path)
+    c = client if auth else _anon(client)
+    resp = c.post(f"/edit/{edit}/unsubscribe",
+                  data={"channel": "telegram", "channel_id": "12345678", "status": "active"})
+    assert resp.status_code == 400
+    assert get_active_page_subscribers(page["id"], db_path) == []
+
+
+def test_public_unsubscribe_route_can_pause(client):
+    from db.models import (create_user_page, get_page_by_edit_token,
+                           add_page_subscriber, get_active_page_subscribers)
+    db_path = client.application.config["DB_PATH"]
+    _, edit = create_user_page("Test", db_path)
+    page = get_page_by_edit_token(edit, db_path)
+    add_page_subscriber(page["id"], "telegram", "12345678", "Alice", db_path)
+    resp = _anon(client).post(f"/edit/{edit}/unsubscribe",
+                              data={"channel": "telegram", "channel_id": "12345678",
+                                    "status": "paused"})
+    assert resp.status_code == 302
+    assert get_active_page_subscribers(page["id"], db_path) == []
+
+
 def test_admin_pages_list(client):
     from db.models import create_user_page
     db_path = client.application.config["DB_PATH"]

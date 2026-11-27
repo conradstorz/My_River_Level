@@ -38,7 +38,7 @@ Guarded by an unguessable `public_token` or `edit_token` in the URL, not by Basi
 | POST | `/edit/<edit_token>/sensitivity` | token | Set how much this page hears about. | 60 per IP per hour, shared by every editor write (429 beyond) |
 | POST | `/edit/<edit_token>/sites/add` | token | Attach a USGS river gauge to the page; a site new to the system is `user`-origin. Refused with a flash once the page has `MAX_SOURCES_PER_PAGE` (20) sources. | 60 per IP per hour, shared by every editor write (429 beyond) |
 | POST | `/edit/<edit_token>/sites/remove` | token | Detach a USGS gauge from the page. | 60 per IP per hour, shared by every editor write (429 beyond) |
-| POST | `/edit/<edit_token>/unsubscribe` | token | Change a page subscriber's status (`active`, `paused` or `unsubscribed`; anything else 400). | 60 per IP per hour, shared by every editor write (429 beyond) |
+| POST | `/edit/<edit_token>/unsubscribe` | token | Pause or remove a page subscriber (`paused` or `unsubscribed`; anything else, `active` included, 400 — re-activating is maintainer-only). | 60 per IP per hour, shared by every editor write (429 beyond) |
 | GET | `/view/<public_token>` | token | Render a public landing page, or 404 if missing/inactive. | — |
 
 ## Pin onboarding (token)
