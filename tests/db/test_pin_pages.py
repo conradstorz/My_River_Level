@@ -1,7 +1,7 @@
 import pytest
 
 from db.models import (
-    ChatHasLivePage, bind_page_to_chat, create_pin_page, create_user_page,
+    ChatHasLivePage, PageNotBindable, bind_page_to_chat, create_pin_page, create_user_page,
     get_active_page_subscribers, get_db, get_page_by_edit_token,
     get_page_for_chat, get_page_gauges, get_page_sites,
     save_pin, set_page_sensitivity, set_page_status,
@@ -110,6 +110,21 @@ def test_bind_refuses_unknown_token_and_foreign_page(tmp_db):
     page = create_pin_page(1, tmp_db)
     assert bind_page_to_chat(page["edit_token"], 2, "Bob", tmp_db) is None
     assert bind_page_to_chat(page["edit_token"], 1, "Ann", tmp_db)["owner_chat_id"] == 1
+
+
+@pytest.mark.parametrize("status", ["active", "paused"])
+def test_bind_refuses_an_admin_created_page_without_side_effects(tmp_db, status):
+    """An admin page's edit token must never turn it into a Pin page."""
+    pinless = create_pin_page(42, tmp_db)            # would be stopped by a bind
+    _pub, edit = create_user_page("Curated River", tmp_db)
+    admin_page = get_page_by_edit_token(edit, tmp_db)
+    set_page_status(admin_page["id"], status, tmp_db)
+    with pytest.raises(PageNotBindable):
+        bind_page_to_chat(edit, 42, "Ann", tmp_db)
+    after = get_page_by_edit_token(edit, tmp_db)
+    assert after["owner_chat_id"] is None and after["status"] == status
+    assert get_active_page_subscribers(admin_page["id"], tmp_db) == []
+    assert get_page_by_edit_token(pinless["edit_token"], tmp_db)["status"] == "pending"
 
 
 def test_save_pin_provisions_sources_with_user_origin(tmp_db):

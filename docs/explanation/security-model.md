@@ -49,7 +49,11 @@ that already has a live pin page is never rebound by tapping a different
 page's link: the existing page stays live, the new page stays unbound, and
 the bot tells the user to send `/stop` first if they really mean to switch.
 Only a deliberate `/stop` from the chat itself releases its page (see
-[`telegram-commands.md`](../reference/telegram-commands.md)).
+[`telegram-commands.md`](../reference/telegram-commands.md)). The deep link
+binds only Pin pages — an unowned page still `pending`, or one the chat
+already owns. An admin-created page's edit token is refused with a bot reply
+and nothing changes, so a leaked admin edit link cannot be turned into a Pin
+page whose curated sources the public pin save would then replace.
 
 The pin routes are the one place an anonymous visitor's click triggers real
 third-party API calls (NLDI, NWPS, USGS), so `web/ratelimit.py`'s

@@ -354,12 +354,25 @@ class ChatHasLivePage(Exception):
         self.page = page
 
 
+class PageNotBindable(Exception):
+    """Raised by `bind_page_to_chat` for a page that is not a Pin page.
+
+    Only an unowned `pending` page (a web-first pin) can be claimed by a
+    chat. An admin-created Page has no owner and is not pending; binding it
+    would hand its curated sources to the public pin flow.
+    """
+
+
 def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
     """Make `chat_id` the owner and an active subscriber of the page.
 
     Returns the updated row, or None when the token is unknown, the page is
     stopped, or another chat already owns it. A page that already has its
     pin becomes active; one still waiting for a pin stays pending.
+
+    Only a Pin page can be bound: one this chat already owns, or an unowned
+    page still `pending`. Any other unowned page (an admin-created Page)
+    raises `PageNotBindable` and nothing changes.
 
     A chat has at most one live page. If the chat already owns a different
     live page (active, paused, or pending with a pin saved) nothing changes
@@ -377,6 +390,8 @@ def bind_page_to_chat(edit_token, chat_id, display_name, db_path=None):
             return None
         if page["owner_chat_id"] is not None and page["owner_chat_id"] != chat_id:
             return None
+        if page["owner_chat_id"] is None and page["status"] != "pending":
+            raise PageNotBindable(f"page {page['id']} is not a Pin page")
         cur.execute(
             """SELECT * FROM user_pages
                WHERE owner_chat_id=%s AND id<>%s

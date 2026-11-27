@@ -1,8 +1,8 @@
-from db.models import (create_pin_page, get_page_by_edit_token, get_page_for_chat,
-                       get_page_gauges, get_page_sites, save_pin, set_page_status,
-                       set_setting)
+from db.models import (create_pin_page, create_user_page, get_page_by_edit_token,
+                       get_page_for_chat, get_page_gauges, get_page_sites, save_pin,
+                       set_page_status, set_setting)
 from monitor.adapters.telegram_commands import (
-    NO_BASE_URL, NO_PAGE, apply_callback, map_url, sensitivity_keyboard,
+    ADMIN_PAGE_NOT_BINDABLE, NO_BASE_URL, NO_PAGE, apply_callback, map_url, sensitivity_keyboard,
     set_status_reply, settings_reply, sources_keyboard, start_chat,
 )
 
@@ -117,6 +117,26 @@ def test_start_with_own_token_is_a_harmless_success(tmp_db):
     assert "Connected" in reply and "/stop" not in reply
     assert get_page_by_edit_token(mine["edit_token"], tmp_db)["status"] == "active"
     assert get_page_for_chat(42, tmp_db)["id"] == mine["id"]
+
+
+def test_start_with_an_admin_page_token_is_refused_and_pin_save_stays_closed(tmp_db):
+    """Binding must not make an admin page reachable by the public pin flow."""
+    from unittest.mock import patch
+    from web.app import create_app
+    _base(tmp_db)
+    _pub, edit = create_user_page("Curated River", tmp_db)
+    reply = start_chat(42, "Ann", edit, tmp_db)
+    assert reply == ADMIN_PAGE_NOT_BINDABLE
+    assert get_page_by_edit_token(edit, tmp_db)["owner_chat_id"] is None
+    app = create_app(db_path=tmp_db)
+    app.config["TESTING"] = True
+    with app.test_client() as c, \
+            patch("web.routes.validate_usgs_site", return_value=(True, "X", "")):
+        resp = c.post(f"/pin/{edit}/save", json={
+            "lat": 38.0, "lon": -85.0,
+            "sources": [{"kind": "usgs", "id": "03294500"}]})
+    assert resp.status_code == 404
+    assert get_page_sites(get_page_by_edit_token(edit, tmp_db)["id"], tmp_db) == []
 
 
 def test_start_with_bad_token_reports_it(tmp_db):
